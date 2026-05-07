@@ -77,6 +77,8 @@ def init_db():
         ("isp", "TEXT DEFAULT ''"),
         ("os_name", "TEXT DEFAULT ''"),
         ("last_meta_at", "TEXT DEFAULT ''"),
+        ("free_forever", "INTEGER DEFAULT 0"),
+        ("auto_renew", "INTEGER DEFAULT 0"),
     ]:
         ensure_column(conn, "servers", col, definition)
 
@@ -232,7 +234,7 @@ def split_command_lines(text):
 
 
 LOCAL_EDIT_PREFIXES = ("编辑本机名称", "编辑本机备注", "编辑本机到期", "编辑本机价格", "编辑本机周期", "本机续费")
-SERVER_EDIT_PREFIXES = ("编辑备注", "编辑到期", "编辑价格", "编辑周期", "编辑端口", "编辑名称", "编辑系统", "续费服务器", "刷新地区")
+SERVER_EDIT_PREFIXES = ("编辑备注", "编辑到期", "编辑价格", "编辑周期", "编辑端口", "编辑名称", "编辑系统", "编辑永久", "编辑自动续费", "续费服务器", "刷新地区")
 
 
 def is_batch_edit_text(text):
@@ -616,6 +618,112 @@ def normalize_currency(currency):
     return {"人民币": "CNY", "RMB": "CNY", "¥": "CNY", "美元": "USD", "$": "USD", "欧元": "EUR", "€": "EUR", "英镑": "GBP", "£": "GBP"}.get(raw, upper)
 
 
+
+
+def truthy(v):
+    v = str(v if v is not None else "").strip().lower()
+    return v in ["1", "true", "yes", "y", "on", "是", "开启", "打开", "启用", "永久", "永久免费", "免费"]
+
+
+def bool_text(v, yes="✅ 是", no="❌ 否"):
+    return yes if truthy(v) else no
+
+
+def is_free_forever_row(r):
+    try:
+        return truthy(r["free_forever"])
+    except Exception:
+        return False
+
+
+def is_auto_renew_row(r):
+    try:
+        return truthy(r["auto_renew"])
+    except Exception:
+        return False
+
+
+def server_price_line(r):
+    if is_free_forever_row(r):
+        return "🎁 永久免费"
+    return f"{currency_name(r['currency'])} {r['price']:g} {r['currency']}"
+
+
+def cycle_months(cycle):
+    cycle = normalize_cycle(cycle)
+    if cycle == "quarterly":
+        return 3
+    if cycle == "yearly":
+        return 12
+    return 1
+
+
+def is_valid_date_text(value):
+    value = str(value or "").strip()
+    if not value or value in ["永久", "永久免费", "未设置", "无", "none", "None", "-"]:
+        return False
+    try:
+        parse_date(value)
+        return True
+    except Exception:
+        return False
+
+
+def next_natural_expire(expire_at, cycle):
+    today = datetime.now().date()
+    months = cycle_months(cycle)
+    try:
+        base = parse_date(expire_at).date()
+    except Exception:
+        base = today
+    while base <= today:
+        base = base + relativedelta(months=months)
+    return base.strftime("%Y-%m-%d")
+
+
+def add_builder_keyboard(mask=13):
+    # bits: 1备注 2系统 4付费/到期 8检测端口 16永久免费 32自动续费
+    items = [(1, "📝 备注"), (2, "🧬 系统"), (4, "💰 付费/到期"), (8, "🔌 检测端口"), (16, "🎁 永久免费"), (32, "🔁 自动续费")]
+    rows = []
+    for bit, label in items:
+        mark = "✅" if (mask & bit) else "⬜"
+        rows.append([{"text": f"{mark} {label}", "callback_data": f"add_toggle:{mask}:{bit}"}])
+    rows.append([{"text": "📋 生成添加模板", "callback_data": f"add_template:{mask}"}])
+    rows.append([{"text": "❓ 字段说明", "callback_data": "add_help_fields"}])
+    return rows
+
+
+def add_template_text(mask=13):
+    free = bool(mask & 16)
+    lines = ["添加服务器", "名称: HK-Oracle", "主机: 1.2.3.4"]
+    if mask & 1:
+        lines.append("备注: 香港甲骨文 免费机器")
+    if mask & 2:
+        lines.append("系统: Ubuntu 22.04")
+    else:
+        lines.append("# 系统未勾选：机器人会尝试自动识别")
+    if free:
+        lines.append("永久免费: 是")
+    elif mask & 4:
+        lines.extend(["周期: 年付", "价格: 0", "币种: USD", "到期: 2026-08-01"])
+    if mask & 8:
+        lines.append("检测端口: 22")
+    if (mask & 32) and not free:
+        lines.append("自动续费: 是")
+    return "\n".join(lines)
+
+
+def cmd_add_builder(chat_id, mask=13):
+    send_inline(chat_id, (
+        "🧾✨ <b>添加服务器字段选择</b> ✨🧾\n\n"
+        "✅ 勾选哪个字段，生成模板就带哪个字段。\n"
+        "⬜ 不勾选的字段不会出现在模板里。\n\n"
+        "📌 <b>必填字段：</b>名称、主机\n"
+        "🧬 系统不勾选：会尝试自动识别 SSH Banner。\n"
+        "🎁 永久免费：不需要价格、币种、到期时间，也不会触发到期提醒。\n"
+        "🔁 自动续费：服务器过期且仍在线时，自动顺延到下个自然周期。"
+    ), add_builder_keyboard(mask))
+
 def service_cn(status):
     status = str(status).strip()
     return {"active": "✅ 运行中", "inactive": "⚠️ 未运行", "failed": "🚨 运行失败", "unknown": "❓ 未知", "": "❓ 未检测到"}.get(status, status or "❓ 未知")
@@ -831,26 +939,27 @@ def get_server_row(sid):
     return row
 
 
-def expire_status_text(expire_at):
+def expire_status_text(expire_at, free_forever=False):
+    if truthy(free_forever) or str(expire_at or "").strip() in ["永久", "永久免费"]:
+        return "🎁 永久免费"
+    if not str(expire_at or "").strip():
+        return "未设置"
     try:
         exp = parse_date(expire_at).date()
         days = (exp - datetime.now().date()).days
-        if days < 0:
-            return f"🚨 已过期 {abs(days)} 天"
-        if days == 0:
-            return "🚨 今天到期"
-        if days <= 7:
-            return f"⚠️ 剩余 {days} 天"
-        if days <= 30:
-            return f"⏰ 剩余 {days} 天"
+        if days < 0: return f"🚨 已过期 {abs(days)} 天"
+        if days == 0: return "🚨 今天到期"
+        if days <= 7: return f"⚠️ 剩余 {days} 天"
+        if days <= 30: return f"⏰ 剩余 {days} 天"
         return f"✅ 剩余 {days} 天"
     except Exception:
         return "未知"
 
-
 def server_detail_text(r):
     online = check_tcp(r["host"], r["check_port"])
     status_text = "🟢 在线" if online else "🔴 离线"
+    free = is_free_forever_row(r)
+    auto = is_auto_renew_row(r)
     return (
         "🖥️✨ <b>服务器详细信息</b> ✨🖥️\n"
         f"🕒 更新时间：{now_text()}\n\n"
@@ -864,27 +973,29 @@ def server_detail_text(r):
         f"🧬 <b>系统：</b>{h(r['os_name'] if 'os_name' in r.keys() and r['os_name'] else '未知系统')}\n"
         f"🔌 <b>检测端口：</b>{h(r['check_port'])}\n"
         f"📝 <b>备注：</b>{h(r['note'] or '无')}\n"
+        f"🎁 <b>永久免费：</b>{bool_text(free)}\n"
+        f"🔁 <b>自动续费：</b>{bool_text(auto)}\n"
         f"🔁 <b>周期：</b>{cycle_name(r['cycle'])}\n"
-        f"💰 <b>价格：</b>{currency_name(r['currency'])} {r['price']:g} {r['currency']}\n"
-        f"📆 <b>到期：</b>{h(r['expire_at'])}\n"
-        f"⏳ <b>到期状态：</b>{expire_status_text(r['expire_at'])}\n"
+        f"💰 <b>价格：</b>{server_price_line(r)}\n"
+        f"📆 <b>到期：</b>{h(r['expire_at'] if r['expire_at'] else '未设置')}\n"
+        f"⏳ <b>到期状态：</b>{expire_status_text(r['expire_at'], free)}\n"
         "━━━━━━━━━━━━━━\n"
         "✏️ <b>编辑命令：</b>\n"
         f"<code>编辑备注 {r['id']} 新备注</code>\n"
         f"<code>编辑到期 {r['id']} 2027-05-01</code>\n"
         f"<code>编辑价格 {r['id']} 38 CNY</code>\n"
-        f"<code>续费服务器 {r['id']} 2027-05-01</code>"
+        f"<code>编辑永久 {r['id']} 是</code> / <code>编辑永久 {r['id']} 否</code>\n"
+        f"<code>编辑自动续费 {r['id']} 是</code> / <code>编辑自动续费 {r['id']} 否</code>"
     )
-
 
 def server_button_label(r):
     online = check_tcp(r["host"], r["check_port"])
     status = "🟢" if online else "🔴"
     flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
-    days = expire_status_text(r["expire_at"])
-    # 按钮文字不要太长，否则 Telegram 会截断。
-    return f"{status} {flag} ID{r['id']}｜{r['name']}｜{days}"
-
+    days = expire_status_text(r["expire_at"], is_free_forever_row(r))
+    free = "🎁" if is_free_forever_row(r) else ""
+    auto = "🔁" if is_auto_renew_row(r) else ""
+    return f"{status} {flag}{free}{auto} ID{r['id']}｜{r['name']}｜{days}"
 
 def servers_inline_keyboard(rows):
     kb = []
@@ -903,22 +1014,12 @@ def servers_inline_keyboard(rows):
 
 def server_detail_keyboard(sid):
     return [
-        [
-            {"text": "✏️ 编辑说明", "callback_data": f"server_edit:{sid}"},
-            {"text": "⏰ 续费说明", "callback_data": f"server_renew_help:{sid}"},
-        ],
-        [
-            {"text": "📆 月付+1月", "callback_data": f"renew_month:{sid}"},
-            {"text": "🗓️ 季付+3月", "callback_data": f"renew_quarter:{sid}"},
-            {"text": "📅 年付+1年", "callback_data": f"renew_year:{sid}"},
-        ],
-        [
-            {"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"},
-            {"text": "🗑️ 删除确认", "callback_data": f"delete_confirm:{sid}"},
-        ],
+        [{"text": "✏️ 编辑说明", "callback_data": f"server_edit:{sid}"}, {"text": "⏰ 续费说明", "callback_data": f"server_renew_help:{sid}"}],
+        [{"text": "📆 月付+1月", "callback_data": f"renew_month:{sid}"}, {"text": "🗓️ 季付+3月", "callback_data": f"renew_quarter:{sid}"}, {"text": "📅 年付+1年", "callback_data": f"renew_year:{sid}"}],
+        [{"text": "🎁 永久免费 开/关", "callback_data": f"toggle_free:{sid}"}, {"text": "🔁 自动续费 开/关", "callback_data": f"toggle_auto:{sid}"}],
+        [{"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"}, {"text": "🗑️ 删除确认", "callback_data": f"delete_confirm:{sid}"}],
         [{"text": "⬅️ 返回服务器列表", "callback_data": "servers:refresh"}],
     ]
-
 
 def cmd_server_detail(chat_id, sid):
     r = get_server_row(sid)
@@ -964,16 +1065,48 @@ def quick_renew_server(sid, months):
     conn = db()
     row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
     if not row:
-        conn.close()
-        return None, "❌ 没有找到这个服务器 ID。"
+        conn.close(); return None, "❌ 没有找到这个服务器 ID。"
+    if is_free_forever_row(row):
+        conn.close(); return row, "🎁 这台服务器是永久免费的，不需要续费。"
     new_date = add_months_to_expire(row["expire_at"], months)
     conn.execute("UPDATE servers SET expire_at=? WHERE id=?", (new_date, sid))
-    clear_reminders(conn, sid)
-    conn.commit()
+    clear_reminders(conn, sid); conn.commit()
     row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
     conn.close()
     event_add("action", "快速续费服务器", f"服务器 ID {sid} 已续费到 {new_date}")
     return row, f"✅ 已续费到 {new_date}"
+
+
+def auto_renew_expired_online_servers():
+    """自动续费：服务器已过期且当前在线时，按月/季/年顺延到下个自然周期。"""
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers WHERE auto_renew=1 AND IFNULL(free_forever,0)=0").fetchall()
+    today = datetime.now().date()
+    for r in rows:
+        if not is_valid_date_text(r["expire_at"]):
+            continue
+        exp = parse_date(r["expire_at"]).date()
+        if exp >= today:
+            continue
+        if not check_tcp(r["host"], r["check_port"]):
+            continue
+        new_date = next_natural_expire(r["expire_at"], r["cycle"])
+        conn.execute("UPDATE servers SET expire_at=? WHERE id=?", (new_date, r["id"]))
+        conn.execute("DELETE FROM reminders WHERE server_id=?", (r["id"],))
+        conn.commit()
+        event_add("action", "自动续费", f"服务器 {r['name']} 在线且已过期，已自动顺延到 {new_date}")
+        broadcast(
+            "✅🔁 <b>服务器已自动续费</b> 🔁✅\n\n"
+            "━━━━━━━━━━━━━━\n"
+            f"🖥️ <b>名称：</b>{h(r['name'])}\n"
+            f"🌐 <b>主机：</b><code>{h(r['host'])}</code>\n"
+            f"🔁 <b>周期：</b>{cycle_name(r['cycle'])}\n"
+            f"📆 <b>原到期：</b>{h(r['expire_at'])}\n"
+            f"📅 <b>新到期：</b>{h(new_date)}\n"
+            "━━━━━━━━━━━━━━\n"
+            "📌 触发条件：服务器已过期，但检测端口仍在线。"
+        )
+    conn.close()
 
 def set_bot_commands():
     # Telegram 左侧命令菜单只支持 /英文小写命令；中文命令不能放进这个菜单。
@@ -1059,6 +1192,8 @@ def cmd_help(chat_id):
 <code>编辑端口 1 443</code>
 <code>编辑名称 1 HK-Oracle</code>
 <code>编辑系统 1 Ubuntu 22.04</code>
+<code>编辑永久 1 是</code> / <code>编辑永久 1 否</code>
+<code>编辑自动续费 1 是</code> / <code>编辑自动续费 1 否</code>
 <code>续费服务器 1 2027-05-01</code>
 <code>刷新地区 1</code>
 <code>刷新全部地区</code>
@@ -1319,39 +1454,24 @@ def cmd_add_server(chat_id, text):
             raw = raw.replace(prefix, "", 1).strip()
             break
     if not raw:
-        send(chat_id, """
-🧾✨ <b>添加服务器</b> ✨🧾
-
-直接复制下面模板到 TG 发送：
-
-<code>添加服务器
-名称: HK-Oracle
-主机: 1.2.3.4
-备注: 香港甲骨文 免费机器
-系统: Ubuntu 22.04
-周期: 年付
-价格: 0
-币种: USD
-到期: 2026-08-01
-检测端口: 22</code>
-
-📌 地区/国家会根据 IP 自动识别并显示国旗。
-📌 系统如果不填写，会尝试读取 SSH 服务信息，但无法无密码准确识别远程系统发行版。
-""".strip())
+        cmd_add_builder(chat_id)
         return
+    raw = "\n".join(line for line in raw.splitlines() if not line.strip().startswith("#"))
     data = parse_form(raw)
     name = data.get("名称") or data.get("name")
     host = data.get("主机") or data.get("host") or data.get("IP") or data.get("ip")
     note = data.get("备注") or data.get("note") or ""
     os_name = data.get("系统") or data.get("os") or data.get("system") or ""
-    cycle = data.get("周期") or data.get("cycle")
-    price = data.get("价格") or data.get("price")
-    currency = data.get("币种") or data.get("currency")
-    expire_at = data.get("到期") or data.get("到期日") or data.get("expire") or data.get("expire_at")
+    cycle = data.get("周期") or data.get("cycle") or "monthly"
+    price = data.get("价格") or data.get("price") or "0"
+    currency = data.get("币种") or data.get("currency") or "USD"
+    expire_at = data.get("到期") or data.get("到期日") or data.get("expire") or data.get("expire_at") or ""
     check_port = data.get("检测端口") or data.get("端口") or data.get("port") or "22"
-    missing = [label for label, value in [("名称", name), ("主机", host), ("周期", cycle), ("价格", price), ("币种", currency), ("到期", expire_at)] if not value]
+    free_forever = truthy(data.get("永久免费") or data.get("免费") or data.get("free_forever") or data.get("free"))
+    auto_renew = truthy(data.get("自动续费") or data.get("auto_renew") or data.get("autorenew"))
+    missing = [label for label, value in [("名称", name), ("主机", host)] if not value]
     if missing:
-        send(chat_id, "❌ 缺少字段：" + "、".join(missing) + "\n\n发送 <code>添加服务器</code> 查看模板。")
+        send(chat_id, "❌ 缺少字段：" + "、".join(missing) + "\n\n发送 <code>添加服务器</code> 使用勾选模板生成器。")
         return
     cycle = normalize_cycle(cycle)
     currency = normalize_currency(currency)
@@ -1362,29 +1482,31 @@ def cmd_add_server(chat_id, text):
         send(chat_id, "❌ 币种只支持：CNY / USD / EUR / GBP")
         return
     try:
-        parse_date(expire_at)
-        price = float(price)
+        price = float(price or 0)
         check_port = int(check_port)
+        if not free_forever and expire_at and not is_valid_date_text(expire_at):
+            raise ValueError("到期日期格式错误")
     except Exception:
         send(chat_id, "❌ 价格、日期或检测端口格式错误。日期示例：<code>2026-08-01</code>")
         return
+    if free_forever:
+        price = 0.0; currency = "USD"; expire_at = "永久"; auto_renew = False
     meta = detect_server_meta(host)
     if not os_name:
         banner = detect_ssh_banner(host, check_port)
-        os_name = f"未知系统 / {banner}" if banner != "未知" else "未知系统"
+        os_name = f"自动识别 / {banner}" if banner != "未知" else "自动识别：未知系统"
     online = check_tcp(host, check_port)
     status = "online" if online else "offline"
     conn = db()
     conn.execute(
-        """INSERT INTO servers(name, host, note, cycle, price, currency, expire_at, check_port, country, country_code, region, city, isp, os_name, last_meta_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (name, host, note, cycle, price, currency, expire_at, check_port, meta["country"], meta["country_code"], meta["region"], meta["city"], meta["isp"], os_name, now_text())
+        """INSERT INTO servers(name, host, note, cycle, price, currency, expire_at, check_port, country, country_code, region, city, isp, os_name, last_meta_at, free_forever, auto_renew)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (name, host, note, cycle, price, currency, expire_at, check_port, meta["country"], meta["country_code"], meta["region"], meta["city"], meta["isp"], os_name, now_text(), 1 if free_forever else 0, 1 if auto_renew else 0)
     )
     conn.commit()
     sid = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
     conn.execute("INSERT OR REPLACE INTO server_status(server_id, last_status, last_checked_at, last_changed_at) VALUES(?,?,?,?)", (sid, status, now_text(), now_text()))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     status_text = "🟢 在线" if online else "🔴 离线"
     event_add("action", "添加服务器", f"添加服务器：{name}，当前状态：{status_text}")
     send(chat_id, (
@@ -1399,13 +1521,13 @@ def cmd_add_server(chat_id, text):
         f"🔌 <b>检测端口：</b>{h(check_port)}\n"
         f"📡 <b>当前状态：</b>{status_text}\n"
         f"📝 <b>备注：</b>{h(note or '无')}\n"
-        f"🔁 <b>周期：</b>{cycle_name(cycle)}\n"
-        f"💰 <b>价格：</b>{currency_name(currency)} {price:g} {currency}\n"
-        f"📆 <b>到期：</b>{h(expire_at)}\n"
+        f"🎁 <b>永久免费：</b>{bool_text(free_forever)}\n"
+        f"🔁 <b>自动续费：</b>{bool_text(auto_renew)}\n"
+        f"💰 <b>价格：</b>{'🎁 永久免费' if free_forever else currency_name(currency) + ' ' + format(price, 'g') + ' ' + currency}\n"
+        f"📆 <b>到期：</b>{h(expire_at or '未设置')}\n"
         "━━━━━━━━━━━━━━\n"
         "⏰ 到期提醒已开启\n📡 在线 / 离线检测已开启"
     ))
-
 
 def cmd_list_servers(chat_id):
     cmd_server_buttons(chat_id)
@@ -1437,7 +1559,7 @@ def clear_reminders(conn, sid):
 
 
 def update_server_field(chat_id, sid, field, value, extra=None):
-    allowed = {"name", "note", "cycle", "price", "currency", "expire_at", "check_port", "os_name"}
+    allowed = {"name", "note", "cycle", "price", "currency", "expire_at", "check_port", "os_name", "free_forever", "auto_renew"}
     if field not in allowed:
         send(chat_id, "❌ 不支持编辑这个字段。")
         return
@@ -1463,6 +1585,13 @@ def update_server_field(chat_id, sid, field, value, extra=None):
             return
     if field == "check_port":
         value = int(value)
+    if field == "free_forever":
+        value = 1 if truthy(value) else 0
+        if value:
+            conn.execute("UPDATE servers SET price=0, currency='USD', expire_at='永久', auto_renew=0 WHERE id=?", (sid,))
+            clear_reminders(conn, sid)
+    if field == "auto_renew":
+        value = 1 if truthy(value) else 0
     conn.execute(f"UPDATE servers SET {field}=? WHERE id=?", (value, sid))
     if extra:
         for k, v in extra.items():
@@ -1485,6 +1614,8 @@ def cmd_edit_help(chat_id):
 <code>编辑端口 1 443</code>
 <code>编辑名称 1 HK-Oracle</code>
 <code>编辑系统 1 Ubuntu 22.04</code>
+<code>编辑永久 1 是</code> / <code>编辑永久 1 否</code>
+<code>编辑自动续费 1 是</code> / <code>编辑自动续费 1 否</code>
 <code>续费服务器 1 2027-05-01</code>
 <code>刷新地区 1</code>
 
@@ -1519,6 +1650,8 @@ def cmd_edit_server(chat_id, text):
         elif action == "编辑端口": update_server_field(chat_id, sid, "check_port", val)
         elif action == "编辑名称": update_server_field(chat_id, sid, "name", val)
         elif action == "编辑系统": update_server_field(chat_id, sid, "os_name", val)
+        elif action == "编辑永久": update_server_field(chat_id, sid, "free_forever", val)
+        elif action == "编辑自动续费": update_server_field(chat_id, sid, "auto_renew", val)
         elif action == "编辑价格":
             pv = val.split()
             if len(pv) == 1:
@@ -1602,6 +1735,8 @@ def monitor_server_online_status():
 
 
 def expiry_push_text(r, days):
+    if is_free_forever_row(r):
+        return ""
     if days < 0:
         title = "🚨💥 <b>服务器已过期</b> 💥🚨"; left = f"🔴 已过期 <b>{abs(days)}</b> 天"; level = "🆘 请立即续费，或确认是否已经停用。"
     elif days == 0:
@@ -1621,7 +1756,8 @@ def expiry_push_text(r, days):
         f"🔌 <b>检测端口：</b>{h(r['check_port'])}\n"
         f"📝 <b>备注：</b>{h(r['note'] or '无')}\n"
         f"🔁 <b>周期：</b>{cycle_name(r['cycle'])}\n"
-        f"💰 <b>价格：</b>{currency_name(r['currency'])} {r['price']:g} {r['currency']}\n"
+        f"🔁 <b>自动续费：</b>{bool_text(is_auto_renew_row(r))}\n"
+        f"💰 <b>价格：</b>{server_price_line(r)}\n"
         f"📆 <b>到期：</b>{h(r['expire_at'])}\n"
         f"⏳ <b>状态：</b>{left}\n━━━━━━━━━━━━━━\n{level}"
     )
@@ -1630,6 +1766,8 @@ def expiry_push_text(r, days):
 def monitor_expiry():
     conn = db(); rows = conn.execute("SELECT * FROM servers").fetchall(); today = datetime.now().date()
     for r in rows:
+        if is_free_forever_row(r) or not is_valid_date_text(r["expire_at"]):
+            continue
         days = (parse_date(r["expire_at"]).date() - today).days
         if days in DUE_REMIND_DAYS or days < 0:
             key = f"{r['id']}:{days}"
@@ -1638,7 +1776,6 @@ def monitor_expiry():
             push_event("expiry", f"到期提醒：{r['name']}", expiry_push_text(r, days))
             conn.execute("INSERT OR REPLACE INTO reminders(server_id, remind_key, sent_at) VALUES(?,?,?)", (r["id"], key, now_text())); conn.commit()
     conn.close()
-
 
 def alert_once(key, title, text, cooldown_minutes=60):
     conn = db(); row = conn.execute("SELECT sent_at FROM alerts WHERE alert_key=?", (key,)).fetchone(); now = datetime.now()
@@ -1711,7 +1848,7 @@ def handle(chat_id, text):
     elif text in ["/edit_server", "编辑服务器", "编辑机器"]: cmd_edit_help(chat_id)
     elif text in ["编辑本机", "编辑当前机器", "本机编辑", "当前机器编辑"]: cmd_local_edit_help(chat_id)
     elif text.startswith(("编辑本机名称", "编辑本机备注", "编辑本机到期", "编辑本机价格", "编辑本机周期", "本机续费")): cmd_edit_local(chat_id, text)
-    elif text.startswith(("编辑备注", "编辑到期", "编辑价格", "编辑周期", "编辑端口", "编辑名称", "编辑系统", "续费服务器", "刷新地区")): cmd_edit_server(chat_id, text)
+    elif text.startswith(("编辑备注", "编辑到期", "编辑价格", "编辑周期", "编辑端口", "编辑名称", "编辑系统", "编辑永久", "编辑自动续费", "续费服务器", "刷新地区")): cmd_edit_server(chat_id, text)
     elif text.startswith(("/del_server", "删除服务器", "删除机器")): cmd_del_server(chat_id, text)
     else:
         send(chat_id, "❓ <b>没有识别这个操作</b>\n\n你可以点击下方中文按钮，或发送：<code>帮助</code> / <code>启用命令</code>")
@@ -1732,6 +1869,39 @@ def handle_callback(callback):
             return
 
         answer_callback(callback_id, "处理中…")
+
+        if data.startswith("add_toggle:"):
+            _, mask, bit = data.split(":")
+            mask = int(mask); bit = int(bit)
+            if mask & bit:
+                mask &= ~bit
+            else:
+                mask |= bit
+            if bit == 16 and (mask & 16):
+                mask &= ~4; mask &= ~32
+            if bit == 4 and (mask & 4):
+                mask &= ~16
+            if bit == 32 and (mask & 32):
+                mask &= ~16; mask |= 4
+            edit_inline_message(chat_id, message_id, (
+                "🧾✨ <b>添加服务器字段选择</b> ✨🧾\n\n"
+                "✅ 勾选哪个字段，生成模板就带哪个字段。\n"
+                "⬜ 不勾选的字段不会出现在模板里。\n\n"
+                "📌 <b>必填字段：</b>名称、主机\n"
+                "🧬 系统不勾选：机器人会尝试自动识别 SSH Banner。\n"
+                "🎁 永久免费：不需要价格、币种、到期时间，也不会触发到期提醒。\n"
+                "🔁 自动续费：服务器过期且仍在线时，自动顺延到下个自然周期。"
+            ), add_builder_keyboard(mask))
+            return
+
+        if data.startswith("add_template:"):
+            mask = int(data.split(":", 1)[1])
+            send(chat_id, "📋✨ <b>添加服务器模板</b> ✨📋\n\n复制下面内容，按需改名称和 IP 后发送给机器人：\n\n" + f"<code>{h(add_template_text(mask))}</code>")
+            return
+
+        if data == "add_help_fields":
+            send(chat_id, "❓🧾 <b>添加服务器字段说明</b>\n\n🖥️ 名称、🌐 主机：必填。\n📝 备注：可选，不勾选就不保存备注。\n🧬 系统：可选，不填会尝试读取 SSH Banner。\n💰 付费/到期：勾选后填写周期、价格、币种、到期时间。\n🎁 永久免费：适合永久免费机器，不需要价格和到期时间。\n🔁 自动续费：过期后如果服务器在线，会按月/季/年自动顺延。\n🔌 检测端口：默认 22，可改 80/443/自定义端口。")
+            return
 
         if data == "servers:refresh":
             refresh_missing_meta()
@@ -1786,7 +1956,9 @@ def handle_callback(callback):
                 f"<code>编辑周期 {h(sid)} 年付</code>\n"
                 f"<code>编辑端口 {h(sid)} 443</code>\n"
                 f"<code>编辑名称 {h(sid)} HK-Oracle</code>\n"
-                f"<code>编辑系统 {h(sid)} Ubuntu 22.04</code>"
+                f"<code>编辑系统 {h(sid)} Ubuntu 22.04</code>\n"
+                f"<code>编辑永久 {h(sid)} 是</code> / <code>编辑永久 {h(sid)} 否</code>\n"
+                f"<code>编辑自动续费 {h(sid)} 是</code> / <code>编辑自动续费 {h(sid)} 否</code>"
             ))
             return
 
@@ -1822,6 +1994,34 @@ def handle_callback(callback):
                 send(chat_id, f"✅⏰ <b>{h(msg_text)}</b>\n\n🆔 ID：<code>{h(sid)}</code>")
             else:
                 send(chat_id, msg_text)
+            return
+
+        if data.startswith("toggle_free:"):
+            sid = data.split(":", 1)[1]
+            conn = db(); row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+            if not row:
+                conn.close(); send(chat_id, "❌ 没有找到这个服务器 ID。"); return
+            new_val = 0 if is_free_forever_row(row) else 1
+            if new_val:
+                conn.execute("UPDATE servers SET free_forever=1, auto_renew=0, price=0, currency='USD', expire_at='永久' WHERE id=?", (sid,))
+                conn.execute("DELETE FROM reminders WHERE server_id=?", (sid,))
+            else:
+                conn.execute("UPDATE servers SET free_forever=0, expire_at='' WHERE id=?", (sid,))
+            conn.commit(); row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone(); conn.close()
+            edit_inline_message(chat_id, message_id, server_detail_text(row), server_detail_keyboard(sid))
+            return
+
+        if data.startswith("toggle_auto:"):
+            sid = data.split(":", 1)[1]
+            conn = db(); row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+            if not row:
+                conn.close(); send(chat_id, "❌ 没有找到这个服务器 ID。"); return
+            if is_free_forever_row(row):
+                conn.close(); send(chat_id, "🎁 永久免费服务器不需要自动续费。"); return
+            new_val = 0 if is_auto_renew_row(row) else 1
+            conn.execute("UPDATE servers SET auto_renew=? WHERE id=?", (new_val, sid))
+            conn.commit(); row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone(); conn.close()
+            edit_inline_message(chat_id, message_id, server_detail_text(row), server_detail_keyboard(sid))
             return
 
         if data.startswith("delete_confirm:"):
@@ -1861,7 +2061,7 @@ def poll():
         try:
             now_ts = time.time()
             if now_ts - last_check >= CHECK_INTERVAL:
-                monitor_local_system(); monitor_server_online_status(); monitor_expiry(); last_check = now_ts
+                monitor_local_system(); monitor_server_online_status(); auto_renew_expired_online_servers(); monitor_expiry(); last_check = now_ts
             r = requests.get(f"{API}/getUpdates", params={"timeout": 25, "offset": offset}, timeout=35).json()
             for item in r.get("result", []):
                 offset = item["update_id"] + 1
