@@ -27,6 +27,9 @@ CPU_ALERT = 90
 MEM_ALERT = 90
 DISK_ALERT = 90
 
+LOCAL_META_CACHE = {"time": 0, "data": None}
+LOCAL_META_TTL = 600
+
 
 def h(v):
     return html.escape(str(v if v is not None else ""))
@@ -126,7 +129,8 @@ def menu_keyboard():
             [{"text": "🧾 添加服务器"}, {"text": "✏️ 编辑服务器"}, {"text": "📡 检测服务器"}],
             [{"text": "🧾 查看事件"}, {"text": "🛡️ 安全状态"}, {"text": "🔐 登录记录"}],
             [{"text": "🚫 防爆破状态"}, {"text": "🔄 重启节点"}, {"text": "🧹 清理缓存"}],
-            [{"text": "🌍 刷新全部地区"}, {"text": "⚙️ 启用命令"}, {"text": "⌨️ 收起键盘"}],
+            [{"text": "🌍 刷新本机地区"}, {"text": "🌍 刷新全部地区"}],
+            [{"text": "⚙️ 启用命令"}, {"text": "⌨️ 收起键盘"}],
             [{"text": "❓ 帮助"}],
         ],
         "resize_keyboard": True,
@@ -244,9 +248,17 @@ def get_local_status():
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     load1, load5, load15 = os.getloadavg()
+    meta = detect_local_meta()
     return {
         "hostname": socket.gethostname(),
         "os": local_os_name(),
+        "public_ip": meta.get("ip", "未知"),
+        "country": meta.get("country", "未知"),
+        "country_code": meta.get("country_code", ""),
+        "region": meta.get("region", ""),
+        "city": meta.get("city", ""),
+        "isp": meta.get("isp", ""),
+        "flag": meta.get("flag") or country_flag(meta.get("country_code", "")),
         "uptime": uptime_text(),
         "cpu": cpu,
         "cpu_count": psutil.cpu_count(),
@@ -260,7 +272,6 @@ def get_local_status():
         "disk_total": disk.total,
         "disk_percent": disk.percent
     }
-
 
 def get_traffic_snapshot():
     return psutil.net_io_counters(), psutil.net_io_counters(pernic=True)
@@ -369,6 +380,74 @@ def detect_server_meta(host):
             pass
     return {"country": "未知", "country_code": "", "region": "", "city": "", "isp": "", "flag": "🌐"}
 
+
+
+def get_public_ip():
+    """获取当前部署机器的公网 IP。"""
+    urls = [
+        "https://api.ipify.org?format=json",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=8, headers={"User-Agent": "server-monitor-bot"})
+            if not r.ok:
+                continue
+            text = r.text.strip()
+            if "json" in r.headers.get("content-type", "") or text.startswith("{"):
+                j = r.json()
+                ip = j.get("ip") or j.get("query") or ""
+            else:
+                ip = text.splitlines()[0].strip()
+            ipaddress.ip_address(ip)
+            return ip
+        except Exception:
+            pass
+    return ""
+
+
+def detect_local_meta(force=False):
+    """识别当前部署机器的公网 IP、国家、地区、城市、运营商和国旗。"""
+    now_ts = time.time()
+    if not force and LOCAL_META_CACHE["data"] and now_ts - LOCAL_META_CACHE["time"] < LOCAL_META_TTL:
+        return LOCAL_META_CACHE["data"]
+
+    public_ip = get_public_ip()
+    if public_ip:
+        meta = detect_server_meta(public_ip)
+        meta["ip"] = public_ip
+    else:
+        meta = {
+            "ip": "未知",
+            "country": "未知",
+            "country_code": "",
+            "region": "",
+            "city": "",
+            "isp": "",
+            "flag": "🌐",
+        }
+
+    LOCAL_META_CACHE["time"] = now_ts
+    LOCAL_META_CACHE["data"] = meta
+    return meta
+
+
+def local_location_line(meta):
+    place = " ".join(x for x in [meta.get("country"), meta.get("region"), meta.get("city")] if x and x != "未知")
+    return f"{meta.get('flag') or country_flag(meta.get('country_code'))} {h(place or meta.get('country') or '未知')}"
+
+
+def cmd_refresh_local_meta(chat_id):
+    meta = detect_local_meta(force=True)
+    send(chat_id, (
+        "✅🌍 <b>本机国家地区已刷新</b> 🌍✅\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🌐 <b>公网 IP：</b><code>{h(meta.get('ip', '未知'))}</code>\n"
+        f"📍 <b>国家地区：</b>{local_location_line(meta)}\n"
+        f"🏢 <b>运营商：</b>{h(meta.get('isp') or '未知')}\n"
+        f"🕒 <b>刷新时间：</b>{now_text()}"
+    ))
 
 def refresh_server_meta_row(conn, row):
     meta = detect_server_meta(row["host"])
@@ -490,6 +569,7 @@ def set_bot_commands():
         {"command": "check_servers", "description": "检测在线/离线"},
         {"command": "add_server", "description": "添加服务器提醒"},
         {"command": "edit_server", "description": "编辑服务器资料"},
+        {"command": "refresh_local_meta", "description": "刷新本机国家地区"},
         {"command": "refresh_all_meta", "description": "刷新全部国家地区"},
         {"command": "hide_keyboard", "description": "收起中文按钮键盘"},
         {"command": "events", "description": "查看服务器事件"},
@@ -582,10 +662,14 @@ def cmd_help(chat_id):
 
 def status_block():
     s = get_local_status()
+    local_place = " ".join(x for x in [s.get("country"), s.get("region"), s.get("city")] if x and x != "未知")
     return (
         "🖥️ <b>本机状态</b>\n"
         "━━━━━━━━━━━━━━\n"
         f"🌐 主机名称：<code>{h(s['hostname'])}</code>\n"
+        f"🌍 公网 IP：<code>{h(s.get('public_ip', '未知'))}</code>\n"
+        f"📍 国家地区：{h(s.get('flag', '🌐'))} {h(local_place or s.get('country') or '未知')}\n"
+        f"🏢 运营商：{h(s.get('isp') or '未知')}\n"
         f"🧬 系统版本：{h(s['os'])}\n"
         f"⏱️ 运行时间：{h(s['uptime'])}\n"
         f"📊 CPU 使用率：{s['cpu']:.0f}%\n"
@@ -594,7 +678,6 @@ def status_block():
         f"🧠 内存使用：{fmt_size(s['mem_used'])} / {fmt_size(s['mem_total'])} ({s['mem_percent']:.0f}%)\n"
         f"💾 磁盘使用：{fmt_size(s['disk_used'])} / {fmt_size(s['disk_total'])} ({s['disk_percent']:.0f}%)"
     )
-
 
 def traffic_block():
     t = traffic_detail()
@@ -1198,6 +1281,7 @@ def handle(chat_id, text):
     if text in ["/start", "/help", "帮助", "菜单", "功能", "命令"]: cmd_help(chat_id)
     elif text in ["/enable_commands", "启用命令", "启用菜单", "开启菜单", "显示命令"]: cmd_enable_commands(chat_id)
     elif text in ["收起键盘", "隐藏键盘", "关闭键盘", "关闭菜单", "收起菜单", "/hide_keyboard"]: send_hide_keyboard(chat_id)
+    elif text in ["刷新本机地区", "刷新本机IP", "刷新本机国家", "本机地区", "/refresh_local_meta"]: cmd_refresh_local_meta(chat_id)
     elif text in ["刷新全部地区", "刷新所有地区", "刷新全部IP", "刷新全部国家", "刷新国家地区", "/refresh_all_meta"]: cmd_refresh_all_meta(chat_id)
     elif text in ["/dashboard", "服务器总览", "总览", "面板", "控制台", "监控面板"]: cmd_dashboard(chat_id)
     elif text in ["/status", "查看状态", "服务器状态", "本机状态", "状态"]: cmd_status(chat_id)
@@ -1247,3 +1331,4 @@ def poll():
 if __name__ == "__main__":
     init_db()
     poll()
+ 
