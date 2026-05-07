@@ -1483,5 +1483,3 @@ def poll():
 if __name__ == "__main__":
     init_db()
     poll()
-systemctl restart server-monitor-bot
-systemctl status server-monitor-bot
