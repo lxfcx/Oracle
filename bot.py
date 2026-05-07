@@ -3,6 +3,7 @@ import os
 import time
 import html
 import json
+import re
 import sqlite3
 import socket
 import subprocess
@@ -120,18 +121,23 @@ def tg(method, payload=None):
 def menu_keyboard():
     return {
         "keyboard": [
-            [{"text": "服务器总览"}, {"text": "查看服务器"}],
-            [{"text": "查看状态"}, {"text": "查看流量"}, {"text": "查看磁盘"}],
-            [{"text": "添加服务器"}, {"text": "编辑服务器"}, {"text": "检测服务器"}],
-            [{"text": "查看事件"}, {"text": "安全状态"}, {"text": "登录记录"}],
-            [{"text": "防爆破状态"}, {"text": "重启节点"}, {"text": "清理缓存"}],
-            [{"text": "帮助"}, {"text": "启用命令"}],
+            [{"text": "📊 服务器总览"}, {"text": "📋 查看服务器"}],
+            [{"text": "🖥️ 查看状态"}, {"text": "🌐 查看流量"}, {"text": "💾 查看磁盘"}],
+            [{"text": "🧾 添加服务器"}, {"text": "✏️ 编辑服务器"}, {"text": "📡 检测服务器"}],
+            [{"text": "🧾 查看事件"}, {"text": "🛡️ 安全状态"}, {"text": "🔐 登录记录"}],
+            [{"text": "🚫 防爆破状态"}, {"text": "🔄 重启节点"}, {"text": "🧹 清理缓存"}],
+            [{"text": "🌍 刷新全部地区"}, {"text": "⚙️ 启用命令"}, {"text": "⌨️ 收起键盘"}],
+            [{"text": "❓ 帮助"}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
         "one_time_keyboard": False,
         "input_field_placeholder": "请选择功能或直接输入中文命令"
     }
+
+
+def remove_keyboard_markup():
+    return {"remove_keyboard": True}
 
 
 def send(chat_id, text, keyboard=True):
@@ -144,6 +150,23 @@ def send(chat_id, text, keyboard=True):
     if keyboard:
         payload["reply_markup"] = menu_keyboard()
     return tg("sendMessage", payload)
+
+
+def send_hide_keyboard(chat_id):
+    return tg("sendMessage", {
+        "chat_id": chat_id,
+        "text": "✅⌨️ <b>中文按钮键盘已收起</b>\n\n需要重新显示时，发送：<code>启用命令</code>",
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": remove_keyboard_markup()
+    })
+
+
+def clean_command_text(text):
+    text = (text or "").strip()
+    # 允许按钮带 Emoji，例如“📊 服务器总览”，处理时自动去掉前面的表情。
+    text = re.sub(r"^[^0-9A-Za-z_\u4e00-\u9fff/]+", "", text).strip()
+    return text
 
 
 def send_long(chat_id, text):
@@ -347,6 +370,49 @@ def detect_server_meta(host):
     return {"country": "未知", "country_code": "", "region": "", "city": "", "isp": "", "flag": "🌐"}
 
 
+def refresh_server_meta_row(conn, row):
+    meta = detect_server_meta(row["host"])
+    conn.execute(
+        "UPDATE servers SET country=?, country_code=?, region=?, city=?, isp=?, last_meta_at=? WHERE id=?",
+        (meta["country"], meta["country_code"], meta["region"], meta["city"], meta["isp"], now_text(), row["id"])
+    )
+    return meta
+
+
+def refresh_missing_meta(limit=20):
+    try:
+        conn = db()
+        rows = conn.execute(
+            "SELECT * FROM servers WHERE country IS NULL OR country='' OR country='未知' ORDER BY id ASC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        for r in rows:
+            refresh_server_meta_row(conn, r)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def cmd_refresh_all_meta(chat_id):
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+    if not rows:
+        conn.close()
+        send(chat_id, "📭 暂无服务器记录，无法刷新地区。")
+        return
+    ok = 0
+    lines = ["🌍✨ <b>国家地区信息已刷新</b> ✨🌍", f"🕒 更新时间：{now_text()}", ""]
+    for r in rows:
+        meta = refresh_server_meta_row(conn, r)
+        ok += 1
+        lines.append(f"{meta['flag']} <b>{h(r['name'])}</b>｜{h(meta['country'])} {h(meta['region'])} {h(meta['city'])}｜{h(meta['isp'] or '未知运营商')}")
+    conn.commit()
+    conn.close()
+    event_add("action", "刷新全部地区", f"已刷新 {ok} 台服务器的国家地区/运营商信息")
+    send_long(chat_id, "\n".join(lines)[:3900])
+
+
 def detect_ssh_banner(host, port):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -424,6 +490,8 @@ def set_bot_commands():
         {"command": "check_servers", "description": "检测在线/离线"},
         {"command": "add_server", "description": "添加服务器提醒"},
         {"command": "edit_server", "description": "编辑服务器资料"},
+        {"command": "refresh_all_meta", "description": "刷新全部国家地区"},
+        {"command": "hide_keyboard", "description": "收起中文按钮键盘"},
         {"command": "events", "description": "查看服务器事件"},
         {"command": "security", "description": "查看安全状态"},
         {"command": "login_log", "description": "查看登录记录"},
@@ -494,6 +562,8 @@ def cmd_help(chat_id):
 <code>编辑系统 1 Ubuntu 22.04</code>
 <code>续费服务器 1 2027-05-01</code>
 <code>刷新地区 1</code>
+<code>刷新全部地区</code>
+<code>收起键盘</code>
 
 ━━━━━━━━━━━━━━━━━━
 🖥️ <b>本机状态</b>
@@ -559,6 +629,7 @@ def server_location_line(r):
 
 
 def servers_summary_block():
+    refresh_missing_meta()
     conn = db()
     rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
     conn.close()
@@ -834,6 +905,7 @@ def cmd_add_server(chat_id, text):
 
 
 def cmd_list_servers(chat_id):
+    refresh_missing_meta()
     conn = db()
     rows = conn.execute("SELECT * FROM servers ORDER BY expire_at ASC").fetchall()
     conn.close()
@@ -869,6 +941,7 @@ def cmd_list_servers(chat_id):
 
 
 def cmd_check_servers(chat_id):
+    refresh_missing_meta()
     conn = db()
     rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
     conn.close()
@@ -1121,9 +1194,11 @@ def handle(chat_id, text):
     if not is_admin(chat_id):
         send(chat_id, "⛔ 未授权用户，拒绝访问。")
         return
-    text = text.strip()
+    text = clean_command_text(text)
     if text in ["/start", "/help", "帮助", "菜单", "功能", "命令"]: cmd_help(chat_id)
     elif text in ["/enable_commands", "启用命令", "启用菜单", "开启菜单", "显示命令"]: cmd_enable_commands(chat_id)
+    elif text in ["收起键盘", "隐藏键盘", "关闭键盘", "关闭菜单", "收起菜单", "/hide_keyboard"]: send_hide_keyboard(chat_id)
+    elif text in ["刷新全部地区", "刷新所有地区", "刷新全部IP", "刷新全部国家", "刷新国家地区", "/refresh_all_meta"]: cmd_refresh_all_meta(chat_id)
     elif text in ["/dashboard", "服务器总览", "总览", "面板", "控制台", "监控面板"]: cmd_dashboard(chat_id)
     elif text in ["/status", "查看状态", "服务器状态", "本机状态", "状态"]: cmd_status(chat_id)
     elif text in ["/disk", "查看磁盘", "磁盘", "磁盘状态", "磁盘使用"]: cmd_disk(chat_id)
