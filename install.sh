@@ -238,7 +238,7 @@ show_menu() {
   echo "━━━━━━━━━━━━━━━━━━━━"
   echo "1) 安装 / 更新机器人"
   echo "2) 编辑 BOT_TOKEN 和 ADMIN_IDS"
-   echo "3) 退出脚本"
+  echo "3) 退出脚本"
   echo "0) 卸载机器人并清理所有数据"
   echo "━━━━━━━━━━━━━━━━━━━━"
   echo
