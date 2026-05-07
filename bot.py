@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import psutil
 import requests
 from dateutil.parser import parse as parse_date
+from dateutil.relativedelta import relativedelta
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS = set(x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip())
@@ -110,6 +111,21 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS local_profile (
+        key TEXT PRIMARY KEY,
+        value TEXT DEFAULT ''
+    )
+    """)
+    for k, v in {
+        "name": socket.gethostname(),
+        "note": "",
+        "cycle": "monthly",
+        "price": "0",
+        "currency": "USD",
+        "expire_at": "",
+    }.items():
+        conn.execute("INSERT OR IGNORE INTO local_profile(key, value) VALUES(?,?)", (k, v))
     conn.commit()
     conn.close()
 
@@ -126,7 +142,8 @@ def menu_keyboard():
         "keyboard": [
             [{"text": "📊 服务器总览"}, {"text": "📋 查看服务器"}],
             [{"text": "🖥️ 查看状态"}, {"text": "🌐 查看流量"}, {"text": "💾 查看磁盘"}],
-            [{"text": "🧾 添加服务器"}, {"text": "✏️ 编辑服务器"}, {"text": "📡 检测服务器"}],
+            [{"text": "🧾 添加服务器"}, {"text": "✏️ 编辑服务器"}, {"text": "🖥️ 编辑本机"}],
+            [{"text": "📡 检测服务器"}, {"text": "📋 选择服务器"}],
             [{"text": "🧾 查看事件"}, {"text": "🛡️ 安全状态"}, {"text": "🔐 登录记录"}],
             [{"text": "🚫 防爆破状态"}, {"text": "🔄 重启节点"}, {"text": "🧹 清理缓存"}],
             [{"text": "🌍 刷新本机地区"}, {"text": "🌍 刷新全部地区"}],
@@ -154,6 +171,33 @@ def send(chat_id, text, keyboard=True):
     if keyboard:
         payload["reply_markup"] = menu_keyboard()
     return tg("sendMessage", payload)
+
+
+def send_inline(chat_id, text, inline_keyboard):
+    return tg("sendMessage", {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": {"inline_keyboard": inline_keyboard}
+    })
+
+
+def edit_inline_message(chat_id, message_id, text, inline_keyboard=None):
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if inline_keyboard is not None:
+        payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
+    return tg("editMessageText", payload)
+
+
+def answer_callback(callback_id, text=""):
+    return tg("answerCallbackQuery", {"callback_query_id": callback_id, "text": text, "show_alert": False})
 
 
 def send_hide_keyboard(chat_id):
@@ -573,6 +617,279 @@ def get_recent_events(limit=8):
     return rows
 
 
+
+
+def get_local_profile():
+    conn = db()
+    rows = conn.execute("SELECT key, value FROM local_profile").fetchall()
+    conn.close()
+    data = {r["key"]: r["value"] for r in rows}
+    data.setdefault("name", socket.gethostname())
+    data.setdefault("note", "")
+    data.setdefault("cycle", "monthly")
+    data.setdefault("price", "0")
+    data.setdefault("currency", "USD")
+    data.setdefault("expire_at", "")
+    return data
+
+
+def set_local_profile_value(key, value):
+    conn = db()
+    conn.execute("INSERT OR REPLACE INTO local_profile(key, value) VALUES(?,?)", (key, str(value)))
+    conn.commit()
+    conn.close()
+
+
+def local_expire_text(profile):
+    exp = (profile.get("expire_at") or "").strip()
+    if not exp:
+        return "未设置"
+    try:
+        days = (parse_date(exp).date() - datetime.now().date()).days
+        if days < 0:
+            return f"{h(exp)}｜🚨 已过期 {abs(days)} 天"
+        if days == 0:
+            return f"{h(exp)}｜🚨 今天到期"
+        if days <= 7:
+            return f"{h(exp)}｜⚠️ 剩余 {days} 天"
+        if days <= 30:
+            return f"{h(exp)}｜⏰ 剩余 {days} 天"
+        return f"{h(exp)}｜✅ 剩余 {days} 天"
+    except Exception:
+        return h(exp)
+
+
+def local_profile_lines():
+    p = get_local_profile()
+    return (
+        f"🏷️ 管理名称：{h(p.get('name') or socket.gethostname())}\n"
+        f"📝 本机备注：{h(p.get('note') or '无')}\n"
+        f"🔁 付费周期：{cycle_name(p.get('cycle') or 'monthly')}\n"
+        f"💰 付费价格：{currency_name(p.get('currency') or 'USD')} {h(p.get('price') or '0')} {h(p.get('currency') or 'USD')}\n"
+        f"📆 到期时间：{local_expire_text(p)}"
+    )
+
+
+def cmd_local_edit_help(chat_id):
+    send(chat_id, """
+🖥️✏️ <b>编辑当前机器资料</b> ✨
+
+当前机器状态里的名称、备注、付费周期、价格、到期时间都可以编辑。
+
+直接发送下面任意一种：
+
+<code>编辑本机名称 Oracle主控机</code>
+<code>编辑本机备注 新加坡主控节点</code>
+<code>编辑本机到期 2027-05-01</code>
+<code>编辑本机价格 38 CNY</code>
+<code>编辑本机周期 年付</code>
+<code>本机续费 2027-05-01</code>
+
+📌 编辑后发送 <code>查看状态</code> 或 <code>服务器总览</code> 查看。 
+""".strip())
+
+
+def cmd_edit_local(chat_id, text):
+    text = text.strip()
+    try:
+        if text.startswith("编辑本机名称"):
+            val = text.replace("编辑本机名称", "", 1).strip()
+            if not val: raise ValueError("名称不能为空")
+            set_local_profile_value("name", val)
+            field = "本机名称"
+        elif text.startswith("编辑本机备注"):
+            val = text.replace("编辑本机备注", "", 1).strip()
+            set_local_profile_value("note", val)
+            field = "本机备注"
+        elif text.startswith("编辑本机到期"):
+            val = text.replace("编辑本机到期", "", 1).strip()
+            parse_date(val)
+            set_local_profile_value("expire_at", val)
+            field = "本机到期"
+        elif text.startswith("本机续费"):
+            val = text.replace("本机续费", "", 1).strip()
+            parse_date(val)
+            set_local_profile_value("expire_at", val)
+            field = "本机续费到期"
+        elif text.startswith("编辑本机周期"):
+            val = normalize_cycle(text.replace("编辑本机周期", "", 1).strip())
+            if val not in ["monthly", "quarterly", "yearly"]:
+                raise ValueError("周期只支持：月付 / 季付 / 年付")
+            set_local_profile_value("cycle", val)
+            field = "本机周期"
+        elif text.startswith("编辑本机价格"):
+            val = text.replace("编辑本机价格", "", 1).strip()
+            parts = val.split()
+            if not parts:
+                raise ValueError("价格不能为空")
+            float(parts[0])
+            set_local_profile_value("price", parts[0])
+            if len(parts) >= 2:
+                cur = normalize_currency(parts[1])
+                if cur not in ["CNY", "USD", "EUR", "GBP"]:
+                    raise ValueError("币种只支持 CNY / USD / EUR / GBP")
+                set_local_profile_value("currency", cur)
+            field = "本机价格"
+        else:
+            cmd_local_edit_help(chat_id)
+            return
+        event_add("action", "编辑当前机器", f"已更新：{field}")
+        send(chat_id, f"✅🖥️ <b>{h(field)}编辑成功</b>\n\n{local_profile_lines()}")
+    except Exception as e:
+        send(chat_id, f"❌ 编辑本机失败：{h(e)}")
+
+
+def get_server_row(sid):
+    conn = db()
+    row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    conn.close()
+    return row
+
+
+def expire_status_text(expire_at):
+    try:
+        exp = parse_date(expire_at).date()
+        days = (exp - datetime.now().date()).days
+        if days < 0:
+            return f"🚨 已过期 {abs(days)} 天"
+        if days == 0:
+            return "🚨 今天到期"
+        if days <= 7:
+            return f"⚠️ 剩余 {days} 天"
+        if days <= 30:
+            return f"⏰ 剩余 {days} 天"
+        return f"✅ 剩余 {days} 天"
+    except Exception:
+        return "未知"
+
+
+def server_detail_text(r):
+    online = check_tcp(r["host"], r["check_port"])
+    status_text = "🟢 在线" if online else "🔴 离线"
+    return (
+        "🖥️✨ <b>服务器详细信息</b> ✨🖥️\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📡 <b>状态：</b>{status_text}\n"
+        f"🆔 <b>ID：</b><code>{r['id']}</code>\n"
+        f"🖥️ <b>名称：</b>{h(r['name'])}\n"
+        f"🌐 <b>主机：</b><code>{h(r['host'])}</code>\n"
+        f"📍 <b>地区：</b>{server_location_line(r)}\n"
+        f"🏢 <b>运营商：</b>{h(r['isp'] if 'isp' in r.keys() and r['isp'] else '未知')}\n"
+        f"🧬 <b>系统：</b>{h(r['os_name'] if 'os_name' in r.keys() and r['os_name'] else '未知系统')}\n"
+        f"🔌 <b>检测端口：</b>{h(r['check_port'])}\n"
+        f"📝 <b>备注：</b>{h(r['note'] or '无')}\n"
+        f"🔁 <b>周期：</b>{cycle_name(r['cycle'])}\n"
+        f"💰 <b>价格：</b>{currency_name(r['currency'])} {r['price']:g} {r['currency']}\n"
+        f"📆 <b>到期：</b>{h(r['expire_at'])}\n"
+        f"⏳ <b>到期状态：</b>{expire_status_text(r['expire_at'])}\n"
+        "━━━━━━━━━━━━━━\n"
+        "✏️ <b>编辑命令：</b>\n"
+        f"<code>编辑备注 {r['id']} 新备注</code>\n"
+        f"<code>编辑到期 {r['id']} 2027-05-01</code>\n"
+        f"<code>编辑价格 {r['id']} 38 CNY</code>\n"
+        f"<code>续费服务器 {r['id']} 2027-05-01</code>"
+    )
+
+
+def server_button_label(r):
+    online = check_tcp(r["host"], r["check_port"])
+    status = "🟢" if online else "🔴"
+    flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+    days = expire_status_text(r["expire_at"])
+    # 按钮文字不要太长，否则 Telegram 会截断。
+    return f"{status} {flag} ID{r['id']}｜{r['name']}｜{days}"
+
+
+def servers_inline_keyboard(rows):
+    kb = []
+    for r in rows:
+        kb.append([{"text": server_button_label(r), "callback_data": f"server:{r['id']}"}])
+    kb.append([
+        {"text": "🔄 刷新列表", "callback_data": "servers:refresh"},
+        {"text": "🧾 添加服务器", "callback_data": "servers:add_help"},
+    ])
+    kb.append([
+        {"text": "✏️ 编辑说明", "callback_data": "servers:edit_help"},
+        {"text": "🌍 刷新地区", "callback_data": "servers:refresh_meta"},
+    ])
+    return kb
+
+
+def server_detail_keyboard(sid):
+    return [
+        [
+            {"text": "✏️ 编辑说明", "callback_data": f"server_edit:{sid}"},
+            {"text": "⏰ 续费说明", "callback_data": f"server_renew_help:{sid}"},
+        ],
+        [
+            {"text": "📆 月付+1月", "callback_data": f"renew_month:{sid}"},
+            {"text": "🗓️ 季付+3月", "callback_data": f"renew_quarter:{sid}"},
+            {"text": "📅 年付+1年", "callback_data": f"renew_year:{sid}"},
+        ],
+        [
+            {"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"},
+            {"text": "🗑️ 删除确认", "callback_data": f"delete_confirm:{sid}"},
+        ],
+        [{"text": "⬅️ 返回服务器列表", "callback_data": "servers:refresh"}],
+    ]
+
+
+def cmd_server_detail(chat_id, sid):
+    r = get_server_row(sid)
+    if not r:
+        send(chat_id, "❌ 没有找到这个服务器 ID。")
+        return
+    send_inline(chat_id, server_detail_text(r), server_detail_keyboard(sid))
+
+
+def cmd_server_buttons(chat_id, title="📋✨ <b>选择服务器查看详情</b> ✨📋"):
+    refresh_missing_meta()
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers ORDER BY expire_at ASC, id ASC").fetchall()
+    conn.close()
+    if not rows:
+        send(chat_id, "📭 暂无服务器记录。\n\n发送 <code>添加服务器</code> 添加。")
+        return
+    online = sum(1 for r in rows if check_tcp(r["host"], r["check_port"]))
+    offline = len(rows) - online
+    text = (
+        f"{title}\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        f"🟢 在线：{online} 台\n"
+        f"🔴 离线：{offline} 台\n"
+        f"📦 总数：{len(rows)} 台\n\n"
+        "👇 每一排就是一台服务器，点击任意服务器查看详细信息。"
+    )
+    send_inline(chat_id, text, servers_inline_keyboard(rows))
+
+
+def add_months_to_expire(expire_at, months):
+    try:
+        base = parse_date(expire_at).date()
+    except Exception:
+        base = datetime.now().date()
+    today = datetime.now().date()
+    if base < today:
+        base = today
+    return (base + relativedelta(months=months)).strftime("%Y-%m-%d")
+
+
+def quick_renew_server(sid, months):
+    conn = db()
+    row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return None, "❌ 没有找到这个服务器 ID。"
+    new_date = add_months_to_expire(row["expire_at"], months)
+    conn.execute("UPDATE servers SET expire_at=? WHERE id=?", (new_date, sid))
+    clear_reminders(conn, sid)
+    conn.commit()
+    row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    conn.close()
+    event_add("action", "快速续费服务器", f"服务器 ID {sid} 已续费到 {new_date}")
+    return row, f"✅ 已续费到 {new_date}"
+
 def set_bot_commands():
     # Telegram 左侧命令菜单只支持 /英文小写命令；中文命令不能放进这个菜单。
     commands = [
@@ -688,6 +1005,7 @@ def status_block():
         f"📍 国家地区：{h(s.get('flag', '🌐'))} {h(local_place or s.get('country') or '未知')}\n"
         f"🏢 运营商：{h(s.get('isp') or '未知')}\n"
         f"🧬 系统版本：{h(s['os'])}\n"
+        f"{local_profile_lines()}\n"
         f"⏱️ 运行时间：{h(s['uptime'])}\n"
         f"📊 CPU 使用率：{s['cpu']:.0f}%\n"
         f"⚙️ 系统负载：{s['load1']:.2f} / {s['load5']:.2f} / {s['load15']:.2f}\n"
@@ -1005,40 +1323,7 @@ def cmd_add_server(chat_id, text):
 
 
 def cmd_list_servers(chat_id):
-    refresh_missing_meta()
-    conn = db()
-    rows = conn.execute("SELECT * FROM servers ORDER BY expire_at ASC").fetchall()
-    conn.close()
-    if not rows:
-        send(chat_id, "📭 暂无服务器记录。\n\n发送 <code>添加服务器</code> 添加。")
-        return
-    now_date = datetime.now().date()
-    lines = ["📋✨ <b>服务器列表</b> ✨📋", f"🕒 更新时间：{now_text()}", ""]
-    for r in rows:
-        online = check_tcp(r["host"], r["check_port"])
-        status_text = "🟢 在线" if online else "🔴 离线"
-        exp = parse_date(r["expire_at"]).date()
-        days = (exp - now_date).days
-        expire_status = f"🚨 已过期 {abs(days)} 天" if days < 0 else "🚨 今天到期" if days == 0 else f"⚠️ 剩余 {days} 天" if days <= 7 else f"⏰ 剩余 {days} 天" if days <= 30 else f"✅ 剩余 {days} 天"
-        lines.append(
-            "━━━━━━━━━━━━━━\n"
-            f"📡 <b>状态：</b>{status_text}\n"
-            f"🆔 <b>ID：</b><code>{r['id']}</code>\n"
-            f"🖥️ <b>名称：</b>{h(r['name'])}\n"
-            f"🌐 <b>主机：</b><code>{h(r['host'])}</code>\n"
-            f"📍 <b>地区：</b>{server_location_line(r)}\n"
-            f"🏢 <b>运营商：</b>{h(r['isp'] if 'isp' in r.keys() and r['isp'] else '未知')}\n"
-            f"🧬 <b>系统：</b>{h(r['os_name'] if 'os_name' in r.keys() and r['os_name'] else '未知系统')}\n"
-            f"🔌 <b>端口：</b>{h(r['check_port'])}\n"
-            f"📝 <b>备注：</b>{h(r['note'] or '无')}\n"
-            f"🔁 <b>周期：</b>{cycle_name(r['cycle'])}\n"
-            f"💰 <b>价格：</b>{currency_name(r['currency'])} {r['price']:g} {r['currency']}\n"
-            f"📆 <b>到期：</b>{h(r['expire_at'])}\n"
-            f"⏳ <b>到期状态：</b>{expire_status}\n"
-            f"✏️ <b>编辑：</b><code>编辑备注 {r['id']} 新备注</code> ｜ <code>续费服务器 {r['id']} 2027-05-01</code>"
-        )
-    send_long(chat_id, "\n".join(lines)[:3900])
-
+    cmd_server_buttons(chat_id)
 
 def cmd_check_servers(chat_id):
     refresh_missing_meta()
@@ -1301,6 +1586,7 @@ def handle(chat_id, text):
     elif text in ["刷新本机地区", "刷新本机IP", "刷新本机国家", "本机地区", "/refresh_local_meta"]: cmd_refresh_local_meta(chat_id)
     elif text in ["刷新全部地区", "刷新所有地区", "刷新全部IP", "刷新全部国家", "刷新国家地区", "/refresh_all_meta"]: cmd_refresh_all_meta(chat_id)
     elif text in ["/dashboard", "服务器总览", "总览", "面板", "控制台", "监控面板"]: cmd_dashboard(chat_id)
+    elif text in ["选择服务器", "服务器按钮", "服务器详情", "查看详情"]: cmd_server_buttons(chat_id)
     elif text in ["/status", "查看状态", "服务器状态", "本机状态", "状态"]: cmd_status(chat_id)
     elif text in ["/disk", "查看磁盘", "磁盘", "磁盘状态", "磁盘使用"]: cmd_disk(chat_id)
     elif text in ["/traffic", "查看流量", "流量", "网络流量", "服务器流量", "流量使用"]: cmd_traffic(chat_id)
@@ -1316,11 +1602,149 @@ def handle(chat_id, text):
     elif text in ["/check_servers", "检测服务器", "检测在线", "检测机器", "在线检测"]: cmd_check_servers(chat_id)
     elif text in ["/events", "查看事件", "服务器事件", "事件记录", "事件"]: cmd_events(chat_id)
     elif text in ["/edit_server", "编辑服务器", "编辑机器"]: cmd_edit_help(chat_id)
+    elif text in ["编辑本机", "编辑当前机器", "本机编辑", "当前机器编辑"]: cmd_local_edit_help(chat_id)
+    elif text.startswith(("编辑本机名称", "编辑本机备注", "编辑本机到期", "编辑本机价格", "编辑本机周期", "本机续费")): cmd_edit_local(chat_id, text)
     elif text.startswith(("编辑备注", "编辑到期", "编辑价格", "编辑周期", "编辑端口", "编辑名称", "编辑系统", "续费服务器", "刷新地区")): cmd_edit_server(chat_id, text)
     elif text.startswith(("/del_server", "删除服务器", "删除机器")): cmd_del_server(chat_id, text)
     else:
         send(chat_id, "❓ <b>没有识别这个操作</b>\n\n你可以点击下方中文按钮，或发送：<code>帮助</code> / <code>启用命令</code>")
 
+
+
+
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if not is_admin(chat_id):
+            answer_callback(callback_id, "未授权")
+            return
+
+        answer_callback(callback_id, "处理中…")
+
+        if data == "servers:refresh":
+            refresh_missing_meta()
+            conn = db()
+            rows = conn.execute("SELECT * FROM servers ORDER BY expire_at ASC, id ASC").fetchall()
+            conn.close()
+            if not rows:
+                edit_inline_message(chat_id, message_id, "📭 暂无服务器记录。", [[{"text": "🧾 添加服务器", "callback_data": "servers:add_help"}]])
+                return
+            online = sum(1 for r in rows if check_tcp(r["host"], r["check_port"]))
+            offline = len(rows) - online
+            text = (
+                "📋✨ <b>选择服务器查看详情</b> ✨📋\n"
+                f"🕒 更新时间：{now_text()}\n\n"
+                f"🟢 在线：{online} 台\n"
+                f"🔴 离线：{offline} 台\n"
+                f"📦 总数：{len(rows)} 台\n\n"
+                "👇 每一排就是一台服务器，点击任意服务器查看详细信息。"
+            )
+            edit_inline_message(chat_id, message_id, text, servers_inline_keyboard(rows))
+            return
+
+        if data == "servers:add_help":
+            cmd_add_server(chat_id, "添加服务器")
+            return
+
+        if data == "servers:edit_help":
+            cmd_edit_help(chat_id)
+            return
+
+        if data == "servers:refresh_meta":
+            cmd_refresh_all_meta(chat_id)
+            return
+
+        if data.startswith("server:"):
+            sid = data.split(":", 1)[1]
+            r = get_server_row(sid)
+            if not r:
+                edit_inline_message(chat_id, message_id, "❌ 没有找到这个服务器。", [[{"text": "⬅️ 返回", "callback_data": "servers:refresh"}]])
+                return
+            edit_inline_message(chat_id, message_id, server_detail_text(r), server_detail_keyboard(sid))
+            return
+
+        if data.startswith("server_edit:"):
+            sid = data.split(":", 1)[1]
+            send(chat_id, (
+                "✏️✨ <b>编辑服务器</b> ✨✏️\n\n"
+                f"当前服务器 ID：<code>{h(sid)}</code>\n\n"
+                f"<code>编辑备注 {h(sid)} 新备注</code>\n"
+                f"<code>编辑到期 {h(sid)} 2027-05-01</code>\n"
+                f"<code>编辑价格 {h(sid)} 38 CNY</code>\n"
+                f"<code>编辑周期 {h(sid)} 年付</code>\n"
+                f"<code>编辑端口 {h(sid)} 443</code>\n"
+                f"<code>编辑名称 {h(sid)} HK-Oracle</code>\n"
+                f"<code>编辑系统 {h(sid)} Ubuntu 22.04</code>"
+            ))
+            return
+
+        if data.startswith("server_renew_help:"):
+            sid = data.split(":", 1)[1]
+            send(chat_id, (
+                "⏰✨ <b>续费服务器</b> ✨⏰\n\n"
+                f"当前服务器 ID：<code>{h(sid)}</code>\n\n"
+                f"手动续费：<code>续费服务器 {h(sid)} 2027-05-01</code>\n\n"
+                "也可以点详情里的：📆 月付+1月 / 🗓️ 季付+3月 / 📅 年付+1年"
+            ))
+            return
+
+        if data.startswith("refresh_meta:"):
+            sid = data.split(":", 1)[1]
+            conn = db()
+            row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+            if row:
+                refresh_server_meta_row(conn, row)
+                conn.commit()
+            row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+            conn.close()
+            if row:
+                edit_inline_message(chat_id, message_id, server_detail_text(row), server_detail_keyboard(sid))
+            return
+
+        if data.startswith("renew_month:") or data.startswith("renew_quarter:") or data.startswith("renew_year:"):
+            kind, sid = data.split(":", 1)
+            months = {"renew_month": 1, "renew_quarter": 3, "renew_year": 12}[kind]
+            row, msg_text = quick_renew_server(sid, months)
+            if row:
+                edit_inline_message(chat_id, message_id, server_detail_text(row), server_detail_keyboard(sid))
+                send(chat_id, f"✅⏰ <b>{h(msg_text)}</b>\n\n🆔 ID：<code>{h(sid)}</code>")
+            else:
+                send(chat_id, msg_text)
+            return
+
+        if data.startswith("delete_confirm:"):
+            sid = data.split(":", 1)[1]
+            edit_inline_message(chat_id, message_id, "⚠️🗑️ <b>确认删除服务器？</b>\n\n删除后会同时删除提醒和状态记录。", [
+                [{"text": "✅ 确认删除", "callback_data": f"delete_do:{sid}"}],
+                [{"text": "取消", "callback_data": f"server:{sid}"}],
+            ])
+            return
+
+        if data.startswith("delete_do:"):
+            sid = data.split(":", 1)[1]
+            row = get_server_row(sid)
+            if not row:
+                edit_inline_message(chat_id, message_id, "❌ 没有找到这个服务器。", [[{"text": "⬅️ 返回", "callback_data": "servers:refresh"}]])
+                return
+            conn = db()
+            conn.execute("DELETE FROM servers WHERE id=?", (sid,))
+            conn.execute("DELETE FROM reminders WHERE server_id=?", (sid,))
+            conn.execute("DELETE FROM server_status WHERE server_id=?", (sid,))
+            conn.commit()
+            conn.close()
+            event_add("action", "删除服务器", f"已删除服务器：{row['name']}")
+            edit_inline_message(chat_id, message_id, f"✅🗑️ <b>服务器已删除</b>\n\n🆔 ID：<code>{h(sid)}</code>\n🖥️ 名称：{h(row['name'])}", [[{"text": "⬅️ 返回服务器列表", "callback_data": "servers:refresh"}]])
+            return
+    except Exception as e:
+        try:
+            send(callback.get("message", {}).get("chat", {}).get("id"), f"❌ 按钮操作失败：{h(e)}")
+        except Exception:
+            pass
 
 def poll():
     offset = 0
@@ -1334,6 +1758,9 @@ def poll():
             r = requests.get(f"{API}/getUpdates", params={"timeout": 25, "offset": offset}, timeout=35).json()
             for item in r.get("result", []):
                 offset = item["update_id"] + 1
+                if item.get("callback_query"):
+                    handle_callback(item["callback_query"])
+                    continue
                 msg = item.get("message") or item.get("edited_message")
                 if not msg: continue
                 chat_id = msg["chat"]["id"]
