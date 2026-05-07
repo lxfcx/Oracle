@@ -217,6 +217,32 @@ def clean_command_text(text):
     return text
 
 
+def one_line(value, default=""):
+    """用于显示和保存名称/价格/周期等单行字段，防止多行命令被误存进去。"""
+    value = str(value if value is not None else "").strip()
+    if not value:
+        return default
+    first = value.splitlines()[0].strip()
+    return first or default
+
+
+def split_command_lines(text):
+    """把一次性粘贴的多条编辑命令拆成多行命令。"""
+    return [clean_command_text(x) for x in str(text or "").splitlines() if clean_command_text(x)]
+
+
+LOCAL_EDIT_PREFIXES = ("编辑本机名称", "编辑本机备注", "编辑本机到期", "编辑本机价格", "编辑本机周期", "本机续费")
+SERVER_EDIT_PREFIXES = ("编辑备注", "编辑到期", "编辑价格", "编辑周期", "编辑端口", "编辑名称", "编辑系统", "续费服务器", "刷新地区")
+
+
+def is_batch_edit_text(text):
+    lines = split_command_lines(text)
+    if len(lines) <= 1:
+        return False
+    prefixes = LOCAL_EDIT_PREFIXES + SERVER_EDIT_PREFIXES
+    return all(line.startswith(prefixes) for line in lines)
+
+
 def send_long(chat_id, text):
     text = text or ""
     while len(text) > 3900:
@@ -622,14 +648,62 @@ def get_recent_events(limit=8):
 def get_local_profile():
     conn = db()
     rows = conn.execute("SELECT key, value FROM local_profile").fetchall()
-    conn.close()
     data = {r["key"]: r["value"] for r in rows}
+
     data.setdefault("name", socket.gethostname())
     data.setdefault("note", "")
     data.setdefault("cycle", "monthly")
     data.setdefault("price", "0")
     data.setdefault("currency", "USD")
     data.setdefault("expire_at", "")
+
+    # 自动修复旧版本误操作：如果用户一次粘贴多行“编辑本机...”命令，旧代码会把后续命令全部存进 name。
+    # 这里会自动把 name 保留第一行，并把后面的编辑命令补写到对应字段。
+    updates = {}
+    name_raw = str(data.get("name") or "")
+    if "\n" in name_raw or "\r" in name_raw:
+        lines = split_command_lines(name_raw)
+        if lines:
+            updates["name"] = one_line(lines[0], socket.gethostname())
+            for line in lines[1:]:
+                try:
+                    if line.startswith("编辑本机名称"):
+                        v = one_line(line.replace("编辑本机名称", "", 1), "")
+                        if v:
+                            updates["name"] = v
+                    elif line.startswith("编辑本机备注"):
+                        updates["note"] = one_line(line.replace("编辑本机备注", "", 1), "")
+                    elif line.startswith("编辑本机到期"):
+                        v = one_line(line.replace("编辑本机到期", "", 1), "")
+                        parse_date(v)
+                        updates["expire_at"] = v
+                    elif line.startswith("本机续费"):
+                        v = one_line(line.replace("本机续费", "", 1), "")
+                        parse_date(v)
+                        updates["expire_at"] = v
+                    elif line.startswith("编辑本机周期"):
+                        v = normalize_cycle(one_line(line.replace("编辑本机周期", "", 1), ""))
+                        if v in ["monthly", "quarterly", "yearly"]:
+                            updates["cycle"] = v
+                    elif line.startswith("编辑本机价格"):
+                        parts = one_line(line.replace("编辑本机价格", "", 1), "").split()
+                        if parts:
+                            float(parts[0])
+                            updates["price"] = parts[0]
+                            if len(parts) >= 2:
+                                cur = normalize_currency(parts[1])
+                                if cur in ["CNY", "USD", "EUR", "GBP"]:
+                                    updates["currency"] = cur
+                except Exception:
+                    pass
+
+    if updates:
+        for k, v in updates.items():
+            conn.execute("INSERT OR REPLACE INTO local_profile(key, value) VALUES(?,?)", (k, str(v)))
+            data[k] = str(v)
+        conn.commit()
+
+    conn.close()
     return data
 
 
@@ -661,11 +735,20 @@ def local_expire_text(profile):
 
 def local_profile_lines():
     p = get_local_profile()
+    name = one_line(p.get('name'), socket.gethostname())
+    note = one_line(p.get('note'), '无')
+    cycle = normalize_cycle(one_line(p.get('cycle'), 'monthly'))
+    if cycle not in ["monthly", "quarterly", "yearly"]:
+        cycle = "monthly"
+    currency = normalize_currency(one_line(p.get('currency'), 'USD'))
+    if currency not in ["CNY", "USD", "EUR", "GBP"]:
+        currency = "USD"
+    price = one_line(p.get('price'), '0')
     return (
-        f"🏷️ 管理名称：{h(p.get('name') or socket.gethostname())}\n"
-        f"📝 本机备注：{h(p.get('note') or '无')}\n"
-        f"🔁 付费周期：{cycle_name(p.get('cycle') or 'monthly')}\n"
-        f"💰 付费价格：{currency_name(p.get('currency') or 'USD')} {h(p.get('price') or '0')} {h(p.get('currency') or 'USD')}\n"
+        f"🏷️ 管理名称：{h(name)}\n"
+        f"📝 本机备注：{h(note)}\n"
+        f"🔁 付费周期：{cycle_name(cycle)}\n"
+        f"💰 付费价格：{currency_name(currency)} {h(price)} {h(currency)}\n"
         f"📆 到期时间：{local_expire_text(p)}"
     )
 
@@ -685,12 +768,14 @@ def cmd_local_edit_help(chat_id):
 <code>编辑本机周期 年付</code>
 <code>本机续费 2027-05-01</code>
 
+📌 可以一次粘贴多条编辑命令，机器人会逐条处理。
 📌 编辑后发送 <code>查看状态</code> 或 <code>服务器总览</code> 查看。 
 """.strip())
 
 
 def cmd_edit_local(chat_id, text):
-    text = text.strip()
+    # 本函数只处理一条编辑命令；多行批量编辑由 handle() 先拆分。
+    text = one_line(text.strip())
     try:
         if text.startswith("编辑本机名称"):
             val = text.replace("编辑本机名称", "", 1).strip()
@@ -1408,7 +1493,9 @@ def cmd_edit_help(chat_id):
 
 
 def cmd_edit_server(chat_id, text):
-    parts = text.strip().split(maxsplit=2)
+    # 本函数只处理一条编辑命令；多行批量编辑由 handle() 先拆分。
+    text = one_line(text.strip())
+    parts = text.split(maxsplit=2)
     if len(parts) < 2:
         cmd_edit_help(chat_id); return
     action = parts[0]
@@ -1579,6 +1666,26 @@ def handle(chat_id, text):
     if not is_admin(chat_id):
         send(chat_id, "⛔ 未授权用户，拒绝访问。")
         return
+
+    # 支持一次粘贴多条编辑命令，例如：
+    # 编辑本机名称 zoro
+    # 编辑本机到期 2026-05-03
+    # 编辑本机价格 50 CNY
+    # 编辑本机周期 月付
+    # 本机续费 2026-06-03
+    if is_batch_edit_text(text):
+        lines = split_command_lines(text)
+        ok = 0
+        for line in lines:
+            if line.startswith(LOCAL_EDIT_PREFIXES):
+                cmd_edit_local(chat_id, line)
+                ok += 1
+            elif line.startswith(SERVER_EDIT_PREFIXES):
+                cmd_edit_server(chat_id, line)
+                ok += 1
+        send(chat_id, f"✅📌 <b>批量编辑处理完成</b>\n\n共处理 <b>{ok}</b> 条编辑命令。")
+        return
+
     text = clean_command_text(text)
     if text in ["/start", "/help", "帮助", "菜单", "功能", "命令"]: cmd_help(chat_id)
     elif text in ["/enable_commands", "启用命令", "启用菜单", "开启菜单", "显示命令"]: cmd_enable_commands(chat_id)
