@@ -1,4 +1,3 @@
-cat > /opt/server-monitor-bot/bot.py <<'PY'
 #!/usr/bin/env python3
 import os
 import time
@@ -1484,8 +1483,5 @@ def poll():
 if __name__ == "__main__":
     init_db()
     poll()
-PY
-
-chmod +x /opt/server-monitor-bot/bot.py
 systemctl restart server-monitor-bot
 systemctl status server-monitor-bot
