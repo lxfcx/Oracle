@@ -4,7 +4,7 @@ set -e
 BOT_TOKEN="${BOT_TOKEN:-}"
 ADMIN_IDS="${ADMIN_IDS:-}"
 
-REPO_URL="https://raw.githubusercontent.com/你的用户名/server-monitor-bot/main"
+REPO_URL="https://raw.githubusercontent.com/lxfcx/Oracle/main"
 
 APP_DIR="/opt/server-monitor-bot"
 SERVICE_NAME="server-monitor-bot"
