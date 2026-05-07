@@ -2053,6 +2053,374 @@ def handle_callback(callback):
         except Exception:
             pass
 
+
+# =========================
+# Enhanced navigation / wizard UI overrides
+# =========================
+
+def get_all_servers(order="expire"):
+    refresh_missing_meta()
+    conn = db()
+    if order == "id":
+        rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM servers ORDER BY expire_at ASC, id ASC").fetchall()
+    conn.close()
+    return rows
+
+
+def build_server_button_rows(rows, limit=12):
+    kb = []
+    for r in rows[:limit]:
+        kb.append([{"text": server_button_label(r), "callback_data": f"server:{r['id']}"}])
+    if len(rows) > limit:
+        kb.append([{"text": f"📋 查看全部服务器（共 {len(rows)} 台）", "callback_data": "nav:servers"}])
+    return kb
+
+
+def dashboard_inline_keyboard():
+    rows = get_all_servers()
+    kb = [
+        [{"text": "➡️ 下一步：选择服务器", "callback_data": "nav:servers"}],
+    ]
+    kb.extend(build_server_button_rows(rows, limit=8))
+    kb.extend([
+        [{"text": "🖥️ 本机状态", "callback_data": "nav:status"}, {"text": "🌐 流量", "callback_data": "nav:traffic"}, {"text": "💾 磁盘", "callback_data": "nav:disk"}],
+        [{"text": "🧾 添加服务器", "callback_data": "nav:add"}, {"text": "📡 检测服务器", "callback_data": "nav:check"}],
+        [{"text": "🧾 事件记录", "callback_data": "nav:events"}, {"text": "🛡️ 安全状态", "callback_data": "nav:security"}],
+    ])
+    return kb
+
+
+def standard_nav_keyboard(prev_cb="nav:dashboard", next_cb="nav:servers", next_text="➡️ 下一步：选择服务器"):
+    return [
+        [{"text": "⬅️ 上一步：总览", "callback_data": prev_cb}, {"text": next_text, "callback_data": next_cb}],
+        [{"text": "🧾 添加服务器", "callback_data": "nav:add"}, {"text": "📋 服务器列表", "callback_data": "nav:servers"}],
+    ]
+
+
+def server_detail_keyboard(sid):
+    return [
+        [{"text": "✏️ 编辑说明", "callback_data": f"server_edit:{sid}"}, {"text": "⏰ 续费说明", "callback_data": f"server_renew_help:{sid}"}],
+        [{"text": "📆 月付+1月", "callback_data": f"renew_month:{sid}"}, {"text": "🗓️ 季付+3月", "callback_data": f"renew_quarter:{sid}"}, {"text": "📅 年付+1年", "callback_data": f"renew_year:{sid}"}],
+        [{"text": "🎁 永久免费 开/关", "callback_data": f"toggle_free:{sid}"}, {"text": "🔁 自动续费 开/关", "callback_data": f"toggle_auto:{sid}"}],
+        [{"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"}, {"text": "🗑️ 删除确认", "callback_data": f"delete_confirm:{sid}"}],
+        [{"text": "⬅️ 上一步：服务器列表", "callback_data": "nav:servers"}, {"text": "📊 返回总览", "callback_data": "nav:dashboard"}],
+    ]
+
+
+def dashboard_text():
+    return (
+        "📊✨ <b>服务器总览面板</b> ✨📊\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        f"{status_block()}\n\n{traffic_block()}\n\n{servers_summary_block()}\n\n{events_block(6)}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "👇 <b>下一步：</b>点击下方任意服务器按钮查看详细信息，也可以进入服务器列表。"
+    )[:3900]
+
+
+def cmd_dashboard(chat_id):
+    send_inline(chat_id, dashboard_text(), dashboard_inline_keyboard())
+
+
+def cmd_status(chat_id):
+    send_inline(
+        chat_id,
+        "✅✨ <b>当前机器状态</b> ✨✅\n" + f"🕒 更新时间：{now_text()}\n\n" + status_block(),
+        standard_nav_keyboard(next_cb="nav:traffic", next_text="➡️ 下一步：查看流量")
+    )
+
+
+def disk_text():
+    lines = ["💾✨ <b>磁盘使用情况</b> ✨💾", f"🕒 更新时间：{now_text()}", ""]
+    try:
+        for p in psutil.disk_partitions(all=False):
+            try:
+                usage = psutil.disk_usage(p.mountpoint)
+            except Exception:
+                continue
+            percent = usage.percent
+            status = "🚨 空间严重不足" if percent >= DISK_ALERT else "⚠️ 空间偏高" if percent >= 80 else "✅ 空间正常"
+            lines.append(
+                "━━━━━━━━━━━━━━\n"
+                f"📦 <b>挂载位置：</b><code>{h(p.mountpoint)}</code>\n"
+                f"🧩 <b>设备名称：</b><code>{h(p.device)}</code>\n"
+                f"📁 <b>文件系统：</b>{h(p.fstype or '未知')}\n"
+                f"💽 <b>总容量：</b>{fmt_size(usage.total)}\n"
+                f"📤 <b>已使用：</b>{fmt_size(usage.used)}\n"
+                f"📥 <b>可用空间：</b>{fmt_size(usage.free)}\n"
+                f"📊 <b>使用率：</b>{percent:.0f}%\n"
+                f"📌 <b>状态：</b>{status}\n"
+            )
+        root = psutil.disk_usage("/")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append(f"🚨💥 <b>总体结论：</b>根目录使用率已超过 {DISK_ALERT}%，请尽快清理。" if root.percent >= DISK_ALERT else "✅🌿 <b>总体结论：</b>磁盘空间正常。")
+        lines.append("\n👇 <b>下一步：</b>可以继续查看安全状态或返回总览。")
+    except Exception as e:
+        return f"❌ 获取磁盘信息失败：{h(e)}"
+    return "\n".join(lines)[:3900]
+
+
+def cmd_disk(chat_id):
+    send_inline(chat_id, disk_text(), standard_nav_keyboard(next_cb="nav:security", next_text="➡️ 下一步：安全状态"))
+
+
+def cmd_traffic(chat_id):
+    send_inline(
+        chat_id,
+        "🌐✨ <b>服务器流量使用情况</b> ✨🌐\n" + f"🕒 更新时间：{now_text()}\n\n" + traffic_block() + "\n\n👇 <b>下一步：</b>继续查看磁盘使用情况。",
+        standard_nav_keyboard(next_cb="nav:disk", next_text="➡️ 下一步：查看磁盘")
+    )
+
+
+def security_text():
+    ssh = shell("systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null || echo unknown", 5)
+    f2b = shell("systemctl is-active fail2ban 2>/dev/null || echo unknown", 5)
+    updates = shell("apt list --upgradable 2>/dev/null | sed 1d | wc -l", 10)
+    ufw_raw = shell("ufw status 2>/dev/null || echo 未安装或未启用", 5)
+    firewall = "✅ 已开启" if "Status: active" in ufw_raw else "⚠️ 未开启" if "Status: inactive" in ufw_raw else "❓ 未检测到或未安装"
+    return (
+        "🛡️✨ <b>综合安全状态</b> ✨🛡️\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        f"🔐 <b>SSH 服务：</b>{service_cn(ssh)}\n"
+        f"🚫 <b>防爆破服务：</b>{service_cn(f2b)}\n"
+        f"🔥 <b>防火墙状态：</b>{firewall}\n"
+        f"📦 <b>可更新软件包：</b>{h(updates)} 个\n\n"
+        "👇 <b>下一步：</b>可以查看登录记录或返回总览。"
+    )
+
+
+def cmd_security(chat_id):
+    send_inline(chat_id, security_text(), standard_nav_keyboard(next_cb="nav:login", next_text="➡️ 下一步：登录记录"))
+
+
+def login_log_text():
+    raw = shell("last -w -n 10 | grep -v 'wtmp begins' || true", 10)
+    if not raw.strip():
+        return "🔐✨ <b>最近登录记录</b> ✨🔐\n\n暂无登录记录。"
+    lines = ["🔐✨ <b>最近 SSH 登录记录</b> ✨🔐", f"🕒 更新时间：{now_text()}", ""]
+    for line in raw.splitlines()[:10]:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        lines.append(
+            "━━━━━━━━━━━━━━\n"
+            f"👤 <b>登录用户：</b>{h(parts[0])}\n"
+            f"💻 <b>登录终端：</b>{h(parts[1])}\n"
+            f"🌐 <b>来源地址：</b>{h(parts[2])}\n"
+            f"⏰ <b>登录时间：</b>{h(' '.join(parts[3:8]) if len(parts) >= 8 else ' '.join(parts[3:]) or '未知')}"
+        )
+    lines.append("\n👇 <b>下一步：</b>继续查看防爆破状态。")
+    return "\n".join(lines)[:3900]
+
+
+def cmd_login_log(chat_id):
+    send_inline(chat_id, login_log_text(), standard_nav_keyboard(next_cb="nav:fail2ban", next_text="➡️ 下一步：防爆破状态"))
+
+
+def fail2ban_text():
+    raw = shell(root_cmd("fail2ban-client status sshd 2>/dev/null || fail2ban-client status 2>/dev/null || echo FAIL2BAN_NOT_RUNNING"), 10)
+    if "FAIL2BAN_NOT_RUNNING" in raw:
+        return "🚫✨ <b>防爆破状态</b> ✨🚫\n\n⚠️ <b>当前状态：</b>Fail2ban 未运行或未配置 SSH 防护。"
+    vals = {"Currently failed": "未知", "Total failed": "未知", "Currently banned": "未知", "Total banned": "未知"}
+    for line in raw.splitlines():
+        line = line.strip()
+        for k in list(vals):
+            if k + ":" in line:
+                vals[k] = line.split(":", 1)[1].strip()
+    return (
+        "🚫✨ <b>防爆破状态</b> ✨🚫\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "🛡️ <b>服务状态：</b>✅ 已运行\n"
+        f"⚠️ <b>当前失败登录次数：</b>{h(vals['Currently failed'])}\n"
+        f"📊 <b>累计失败登录次数：</b>{h(vals['Total failed'])}\n"
+        f"🔒 <b>当前封禁 IP 数量：</b>{h(vals['Currently banned'])}\n"
+        f"📌 <b>累计封禁 IP 数量：</b>{h(vals['Total banned'])}\n\n"
+        "👇 <b>下一步：</b>返回总览或选择服务器。"
+    )
+
+
+def cmd_fail2ban(chat_id):
+    send_inline(chat_id, fail2ban_text(), standard_nav_keyboard(next_cb="nav:servers", next_text="➡️ 下一步：选择服务器"))
+
+
+def events_text(limit=15):
+    rows = get_recent_events(limit)
+    if not rows:
+        return "🧾 暂无服务器事件记录。"
+    icons = {"offline": "🚨", "online": "✅", "expiry": "⏰", "system": "🔥", "action": "🛠️", "security": "🛡️"}
+    lines = ["🧾✨ <b>服务器事件记录</b> ✨🧾", f"🕒 更新时间：{now_text()}", ""]
+    for r in rows:
+        lines.append("━━━━━━━━━━━━━━\n" f"{icons.get(r['event_type'], '📌')} <b>{h(r['title'])}</b>\n" f"🕒 <b>时间：</b>{h(r['created_at'])}\n" f"📝 <b>内容：</b>{h(r['content'])}")
+    lines.append("\n👇 <b>下一步：</b>查看服务器详情或返回总览。")
+    return "\n".join(lines)[:3900]
+
+
+def cmd_events(chat_id):
+    send_inline(chat_id, events_text(15), standard_nav_keyboard(next_cb="nav:servers", next_text="➡️ 下一步：选择服务器"))
+
+
+def cmd_server_buttons(chat_id, title="📋✨ <b>选择服务器查看详情</b> ✨📋"):
+    refresh_missing_meta()
+    rows = get_all_servers()
+    if not rows:
+        send_inline(chat_id, "📭 暂无服务器记录。\n\n👇 下一步：点击添加服务器开始。", [[{"text": "🧾 下一步：添加服务器", "callback_data": "nav:add"}], [{"text": "⬅️ 返回总览", "callback_data": "nav:dashboard"}]])
+        return
+    online = sum(1 for r in rows if check_tcp(r["host"], r["check_port"]))
+    offline = len(rows) - online
+    text = (
+        f"{title}\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        f"🟢 在线：{online} 台\n"
+        f"🔴 离线：{offline} 台\n"
+        f"📦 总数：{len(rows)} 台\n\n"
+        "👇 每一排就是一台服务器，点击任意服务器查看详细信息。\n"
+        "➡️ 进入详情后可以继续编辑、续费、删除、刷新地区。"
+    )
+    kb = servers_inline_keyboard(rows)
+    kb.append([{"text": "⬅️ 上一步：总览", "callback_data": "nav:dashboard"}, {"text": "➡️ 下一步：添加服务器", "callback_data": "nav:add"}])
+    send_inline(chat_id, text, kb)
+
+
+def cmd_check_servers(chat_id):
+    refresh_missing_meta()
+    rows = get_all_servers(order="id")
+    if not rows:
+        send_inline(chat_id, "📭 暂无服务器记录。\n\n👇 下一步：点击添加服务器开始。", [[{"text": "🧾 下一步：添加服务器", "callback_data": "nav:add"}], [{"text": "⬅️ 返回总览", "callback_data": "nav:dashboard"}]])
+        return
+    online_count = 0
+    offline_count = 0
+    lines = ["📡✨ <b>服务器在线状态检测</b> ✨📡", f"🕒 检测时间：{now_text()}", ""]
+    for r in rows:
+        online = check_tcp(r["host"], r["check_port"])
+        if online:
+            status_text = "🟢 在线"; online_count += 1
+        else:
+            status_text = "🔴 离线"; offline_count += 1
+        lines.append("━━━━━━━━━━━━━━\n" f"📡 <b>状态：</b>{status_text}\n" f"🖥️ <b>名称：</b>{h(r['name'])}\n" f"📍 <b>地区：</b>{server_location_line(r)}\n" f"🌐 <b>地址：</b><code>{h(r['host'])}:{h(r['check_port'])}</code>\n" f"📝 <b>备注：</b>{h(r['note'] or '无')}")
+    lines.insert(2, f"🟢 在线：{online_count} 台\n🔴 离线：{offline_count} 台\n📦 总数：{len(rows)} 台\n")
+    lines.append("\n👇 <b>下一步：</b>选择服务器查看详细信息。")
+    kb = servers_inline_keyboard(rows)
+    kb.append([{"text": "⬅️ 返回总览", "callback_data": "nav:dashboard"}])
+    send_inline(chat_id, "\n".join(lines)[:3900], kb)
+
+
+# Keep original callback handler for existing server/add workflows, add navigation callbacks first.
+_original_handle_callback = handle_callback
+
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if not is_admin(chat_id):
+            answer_callback(callback_id, "未授权")
+            return
+
+        if data.startswith("nav:"):
+            answer_callback(callback_id, "已打开")
+            page = data.split(":", 1)[1]
+
+            if page == "dashboard":
+                edit_inline_message(chat_id, message_id, dashboard_text(), dashboard_inline_keyboard())
+                return
+
+            if page == "servers":
+                refresh_missing_meta()
+                rows = get_all_servers()
+                if not rows:
+                    edit_inline_message(chat_id, message_id, "📭 暂无服务器记录。\n\n👇 下一步：添加服务器。", [[{"text": "🧾 下一步：添加服务器", "callback_data": "nav:add"}], [{"text": "⬅️ 返回总览", "callback_data": "nav:dashboard"}]])
+                    return
+                online = sum(1 for r in rows if check_tcp(r["host"], r["check_port"]))
+                offline = len(rows) - online
+                text = (
+                    "📋✨ <b>选择服务器查看详情</b> ✨📋\n"
+                    f"🕒 更新时间：{now_text()}\n\n"
+                    f"🟢 在线：{online} 台\n"
+                    f"🔴 离线：{offline} 台\n"
+                    f"📦 总数：{len(rows)} 台\n\n"
+                    "👇 每一排就是一台服务器，点击任意服务器查看详细信息。"
+                )
+                kb = servers_inline_keyboard(rows)
+                kb.append([{"text": "⬅️ 上一步：总览", "callback_data": "nav:dashboard"}, {"text": "➡️ 下一步：添加服务器", "callback_data": "nav:add"}])
+                edit_inline_message(chat_id, message_id, text, kb)
+                return
+
+            if page == "status":
+                edit_inline_message(chat_id, message_id, "✅✨ <b>当前机器状态</b> ✨✅\n" + f"🕒 更新时间：{now_text()}\n\n" + status_block(), standard_nav_keyboard(next_cb="nav:traffic", next_text="➡️ 下一步：查看流量"))
+                return
+
+            if page == "traffic":
+                edit_inline_message(chat_id, message_id, "🌐✨ <b>服务器流量使用情况</b> ✨🌐\n" + f"🕒 更新时间：{now_text()}\n\n" + traffic_block(), standard_nav_keyboard(next_cb="nav:disk", next_text="➡️ 下一步：查看磁盘"))
+                return
+
+            if page == "disk":
+                edit_inline_message(chat_id, message_id, disk_text(), standard_nav_keyboard(next_cb="nav:security", next_text="➡️ 下一步：安全状态"))
+                return
+
+            if page == "security":
+                edit_inline_message(chat_id, message_id, security_text(), standard_nav_keyboard(next_cb="nav:login", next_text="➡️ 下一步：登录记录"))
+                return
+
+            if page == "login":
+                edit_inline_message(chat_id, message_id, login_log_text(), standard_nav_keyboard(next_cb="nav:fail2ban", next_text="➡️ 下一步：防爆破状态"))
+                return
+
+            if page == "fail2ban":
+                edit_inline_message(chat_id, message_id, fail2ban_text(), standard_nav_keyboard(next_cb="nav:servers", next_text="➡️ 下一步：选择服务器"))
+                return
+
+            if page == "events":
+                edit_inline_message(chat_id, message_id, events_text(15), standard_nav_keyboard(next_cb="nav:servers", next_text="➡️ 下一步：选择服务器"))
+                return
+
+            if page == "add":
+                cmd_add_builder(chat_id)
+                return
+
+            if page == "check":
+                cmd_check_servers(chat_id)
+                return
+
+            if page == "help":
+                cmd_help(chat_id)
+                return
+
+        # Improve existing refresh callback to include navigation row
+        if data == "servers:refresh":
+            answer_callback(callback_id, "已刷新")
+            rows = get_all_servers()
+            if not rows:
+                edit_inline_message(chat_id, message_id, "📭 暂无服务器记录。\n\n👇 下一步：添加服务器。", [[{"text": "🧾 下一步：添加服务器", "callback_data": "nav:add"}], [{"text": "⬅️ 返回总览", "callback_data": "nav:dashboard"}]])
+                return
+            online = sum(1 for r in rows if check_tcp(r["host"], r["check_port"]))
+            offline = len(rows) - online
+            text = (
+                "📋✨ <b>选择服务器查看详情</b> ✨📋\n"
+                f"🕒 更新时间：{now_text()}\n\n"
+                f"🟢 在线：{online} 台\n"
+                f"🔴 离线：{offline} 台\n"
+                f"📦 总数：{len(rows)} 台\n\n"
+                "👇 每一排就是一台服务器，点击任意服务器查看详细信息。"
+            )
+            kb = servers_inline_keyboard(rows)
+            kb.append([{"text": "⬅️ 上一步：总览", "callback_data": "nav:dashboard"}, {"text": "➡️ 下一步：添加服务器", "callback_data": "nav:add"}])
+            edit_inline_message(chat_id, message_id, text, kb)
+            return
+
+    except Exception as e:
+        try:
+            send(callback.get("message", {}).get("chat", {}).get("id"), f"❌ 按钮操作失败：{h(e)}")
+        except Exception:
+            pass
+        return
+
+    return _original_handle_callback(callback)
+
+
 def poll():
     offset = 0
     last_check = 0
