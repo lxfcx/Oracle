@@ -247,7 +247,7 @@ show_menu() {
 main_menu() {
   while true; do
     show_menu
-    read -r -p "请选择操作 [1/2/0/3]：" CHOICE
+    read -r -p "请选择操作 [1/2/3/0]：" CHOICE
 
     case "$CHOICE" in
       1)
@@ -258,16 +258,16 @@ main_menu() {
         edit_config
         pause
         ;;
-      0)
-        uninstall_clean
-        pause
-        ;;
       3)
         echo "已退出"
         exit 0
         ;;
+      0)
+        uninstall_clean
+        pause
+        ;;
       *)
-        echo "❌ 无效选项，请输入 1、2、0 或 3"
+        echo "❌ 无效选项，请输入 1、2、3 或 0"
         sleep 1
         ;;
     esac
