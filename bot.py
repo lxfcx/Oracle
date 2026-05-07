@@ -383,12 +383,28 @@ def detect_server_meta(host):
 
 
 def get_public_ip():
-    """获取当前部署机器的公网 IP。"""
+    """获取当前部署机器的公网 IP，优先 IPv4，失败后再尝试 requests。"""
+    cmds = [
+        "curl -4 -s --max-time 8 https://api.ipify.org",
+        "curl -4 -s --max-time 8 https://ifconfig.me/ip",
+        "curl -4 -s --max-time 8 https://icanhazip.com",
+    ]
+
+    for cmd in cmds:
+        try:
+            ip = shell(cmd, 10).strip().splitlines()[0].strip()
+            ipaddress.ip_address(ip)
+            return ip
+        except Exception:
+            pass
+
     urls = [
         "https://api.ipify.org?format=json",
         "https://ifconfig.me/ip",
         "https://icanhazip.com",
+        "https://ipinfo.io/ip",
     ]
+
     for url in urls:
         try:
             r = requests.get(url, timeout=8, headers={"User-Agent": "server-monitor-bot"})
@@ -404,6 +420,7 @@ def get_public_ip():
             return ip
         except Exception:
             pass
+
     return ""
 
 
@@ -1331,4 +1348,3 @@ def poll():
 if __name__ == "__main__":
     init_db()
     poll()
- 
