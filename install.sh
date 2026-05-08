@@ -238,8 +238,8 @@ show_menu() {
   echo "━━━━━━━━━━━━━━━━━━━━"
   echo "1) 安装 / 更新机器人"
   echo "2) 编辑 BOT_TOKEN 和 ADMIN_IDS"
-  echo "3) 退出脚本"
   echo "0) 卸载机器人并清理所有数据"
+  echo "3) 退出脚本"
   echo "━━━━━━━━━━━━━━━━━━━━"
   echo
 }
@@ -247,7 +247,7 @@ show_menu() {
 main_menu() {
   while true; do
     show_menu
-    read -r -p "请选择操作 [1/2/3/0]：" CHOICE
+    read -r -p "请选择操作 [1/2/0/3]：" CHOICE
 
     case "$CHOICE" in
       1)
@@ -258,16 +258,16 @@ main_menu() {
         edit_config
         pause
         ;;
-      3)
-        echo "已退出"
-        exit 0
-        ;;
       0)
         uninstall_clean
         pause
         ;;
+      3)
+        echo "已退出"
+        exit 0
+        ;;
       *)
-        echo "❌ 无效选项，请输入 1、2、3 或 0"
+        echo "❌ 无效选项，请输入 1、2、0 或 3"
         sleep 1
         ;;
     esac
