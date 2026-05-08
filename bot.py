@@ -2658,6 +2658,664 @@ def poll():
             time.sleep(5)
 
 
+# ============================================================
+# Ultra navigation overrides: compact dashboard, local-as-server,
+# per-target status/traffic/disk/events/edit, 300s offline grace,
+# configurable expiry reminder days.
+# ============================================================
+
+OFFLINE_GRACE_SECONDS = int(os.getenv("OFFLINE_GRACE_SECONDS", "300"))
+RECOVERY_STABLE_SECONDS = int(os.getenv("RECOVERY_STABLE_SECONDS", "120"))
+
+
+def get_reminder_days():
+    try:
+        p = get_local_profile()
+        raw = p.get("reminder_days") or ",".join(str(x) for x in DUE_REMIND_DAYS)
+        vals = []
+        for item in str(raw).replace("，", ",").split(","):
+            item = item.strip()
+            if item == "":
+                continue
+            vals.append(int(item))
+        vals = sorted(set(vals), reverse=True)
+        return vals or DUE_REMIND_DAYS
+    except Exception:
+        return DUE_REMIND_DAYS
+
+
+def set_reminder_days(value):
+    raw = str(value or "").replace("，", ",")
+    vals = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        vals.append(int(item))
+    vals = sorted(set(vals), reverse=True)
+    if not vals:
+        raise ValueError("提醒天数不能为空")
+    set_local_profile_value("reminder_days", ",".join(str(x) for x in vals))
+    return vals
+
+
+def compact_local_row():
+    s = get_local_status()
+    p = get_local_profile()
+    name = one_line(p.get("name"), socket.gethostname())
+    place = " ".join(x for x in [s.get("country"), s.get("region"), s.get("city")] if x and x != "未知")
+    return {
+        "id": "local",
+        "name": name,
+        "label": f"🟢 {s.get('flag','🌐')} 🏠 本机｜{name}｜{local_expire_text(p)}",
+        "short": f"🟢 本机｜{name}｜{s.get('flag','🌐')} {place or s.get('country','未知')}",
+    }
+
+
+def server_status_icon_quick(r):
+    return "🟢" if check_tcp(r["host"], r["check_port"], timeout=2) else "🔴"
+
+
+def target_buttons(include_local=True, limit=20, cb_prefix="target"):
+    kb = []
+    if include_local:
+        kb.append([{"text": compact_local_row()["label"][:62], "callback_data": f"{cb_prefix}:local"}])
+    rows = get_all_servers(order="id")
+    for r in rows[:limit]:
+        kb.append([{"text": server_button_label(r)[:62], "callback_data": f"{cb_prefix}:server:{r['id']}"}])
+    return kb
+
+
+def main_nav_row():
+    return [
+        {"text": "📊 总览", "callback_data": "nav:dashboard"},
+        {"text": "📋 选择服务器", "callback_data": "nav:servers"},
+    ]
+
+
+def bottom_nav(extra=None):
+    rows = []
+    if extra:
+        rows.extend(extra)
+    rows.append(main_nav_row())
+    rows.append([
+        {"text": "🧾 添加", "callback_data": "nav:add"},
+        {"text": "🛠️ 工具", "callback_data": "nav:tools"},
+    ])
+    return rows
+
+
+def compact_dashboard_text():
+    rows = get_all_servers(order="id")
+    online = 0
+    offline = 0
+    for r in rows:
+        if check_tcp(r["host"], r["check_port"], timeout=2):
+            online += 1
+        else:
+            offline += 1
+    local = compact_local_row()
+    due_days = ",".join(str(x) for x in get_reminder_days())
+    return (
+        "📊✨ <b>服务器总览</b> ✨📊\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "📌 <b>概览</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🏠 本机：1 台\n"
+        f"🟢 在线：{online + 1} 台\n"
+        f"🔴 离线：{offline} 台\n"
+        f"📦 总数：{len(rows) + 1} 台\n"
+        f"⏰ 到期提醒：提前 {h(due_days)} 天\n"
+        f"⏳ 离线宽限：{OFFLINE_GRACE_SECONDS} 秒\n\n"
+        "👇 <b>下一步：请选择本机或任意服务器。</b>"
+    )
+
+
+def dashboard_inline_keyboard():
+    kb = target_buttons(include_local=True, cb_prefix="target")
+    kb.extend([
+        [
+            {"text": "🌐 流量", "callback_data": "select:traffic"},
+            {"text": "💾 磁盘", "callback_data": "select:disk"},
+            {"text": "📡 检测", "callback_data": "nav:check"},
+        ],
+        [
+            {"text": "🧾 事件", "callback_data": "select:events"},
+            {"text": "✏️ 编辑", "callback_data": "select:edit"},
+            {"text": "⏰ 提醒", "callback_data": "nav:reminder"},
+        ],
+        [
+            {"text": "🧾 添加服务器", "callback_data": "nav:add"},
+            {"text": "🛡️ 安全状态", "callback_data": "nav:security"},
+        ],
+    ])
+    return kb
+
+
+def cmd_dashboard(chat_id):
+    send_inline(chat_id, compact_dashboard_text(), dashboard_inline_keyboard())
+
+
+def local_detail_text():
+    return (
+        "🏠✨ <b>本机详细信息</b> ✨🏠\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        f"{status_block()}\n\n"
+        "👇 <b>下一步：</b>可继续查看本机流量、磁盘、事件或编辑资料。"
+    )[:3900]
+
+
+def local_detail_keyboard():
+    return bottom_nav([
+        [
+            {"text": "🌐 本机流量", "callback_data": "view:traffic:local"},
+            {"text": "💾 本机磁盘", "callback_data": "view:disk:local"},
+        ],
+        [
+            {"text": "🧾 本机事件", "callback_data": "view:events:local"},
+            {"text": "✏️ 编辑本机", "callback_data": "edit:local"},
+        ],
+        [{"text": "🌍 刷新本机地区", "callback_data": "local:refresh_meta"}],
+    ])
+
+
+def remote_detail_text(r):
+    # Keep remote detail clean; no long command block by default.
+    online = check_tcp(r["host"], r["check_port"], timeout=3)
+    status_text = "🟢 在线" if online else "🔴 离线"
+    free = is_free_forever_row(r)
+    auto = is_auto_renew_row(r)
+    return (
+        "🖥️✨ <b>服务器详情</b> ✨🖥️\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📡 状态：{status_text}\n"
+        f"🆔 ID：<code>{r['id']}</code>\n"
+        f"🖥️ 名称：{h(r['name'])}\n"
+        f"🌐 主机：<code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📍 地区：{server_location_line(r)}\n"
+        f"🏢 运营商：{h(r['isp'] if 'isp' in r.keys() and r['isp'] else '未知')}\n"
+        f"🧬 系统：{h(r['os_name'] if 'os_name' in r.keys() and r['os_name'] else '未知系统')}\n"
+        f"📝 备注：{h(r['note'] or '无')}\n"
+        f"🎁 永久免费：{bool_text(free)}\n"
+        f"🔁 自动续费：{bool_text(auto)}\n"
+        f"💰 价格：{server_price_line(r)}\n"
+        f"📆 到期：{h(r['expire_at'] if r['expire_at'] else '未设置')}｜{expire_status_text(r['expire_at'], free)}\n"
+        "━━━━━━━━━━━━━━\n"
+        "👇 <b>下一步：</b>查看该服务器流量/磁盘/事件，或编辑续费。"
+    )[:3900]
+
+
+def remote_detail_keyboard(sid):
+    return bottom_nav([
+        [
+            {"text": "🌐 流量", "callback_data": f"view:traffic:server:{sid}"},
+            {"text": "💾 磁盘", "callback_data": f"view:disk:server:{sid}"},
+            {"text": "🧾 事件", "callback_data": f"view:events:server:{sid}"},
+        ],
+        [
+            {"text": "✏️ 编辑", "callback_data": f"edit:server:{sid}"},
+            {"text": "⏰ 续费", "callback_data": f"server_renew_help:{sid}"},
+            {"text": "📡 探针", "callback_data": f"agent_cmd:{sid}"},
+        ],
+        [
+            {"text": "📆 +1月", "callback_data": f"renew_month:{sid}"},
+            {"text": "🗓️ +3月", "callback_data": f"renew_quarter:{sid}"},
+            {"text": "📅 +1年", "callback_data": f"renew_year:{sid}"},
+        ],
+        [
+            {"text": "🎁 永久免费", "callback_data": f"toggle_free:{sid}"},
+            {"text": "🔁 自动续费", "callback_data": f"toggle_auto:{sid}"},
+        ],
+        [
+            {"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"},
+            {"text": "🗑️ 删除", "callback_data": f"delete_confirm:{sid}"},
+        ],
+    ])
+
+
+def target_select_text(action):
+    names = {
+        "status": "查看状态",
+        "traffic": "查看流量",
+        "disk": "查看磁盘",
+        "events": "查看事件",
+        "edit": "编辑资料",
+        "check": "检测状态",
+    }
+    return (
+        f"📋✨ <b>选择目标：{h(names.get(action, action))}</b> ✨📋\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "👇 请选择本机或任意服务器继续下一步。"
+    )
+
+
+def target_select_keyboard(action):
+    kb = target_buttons(include_local=True, cb_prefix=f"view:{action}")
+    kb.extend(bottom_nav())
+    return kb
+
+
+def cmd_server_buttons(chat_id, title="📋✨ <b>选择服务器查看详情</b> ✨📋"):
+    rows = get_all_servers(order="id")
+    online = sum(1 for r in rows if check_tcp(r["host"], r["check_port"], timeout=2))
+    offline = len(rows) - online
+    text = (
+        f"{title}\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "🏠 本机：1 台\n"
+        f"🟢 在线：{online + 1} 台\n"
+        f"🔴 离线：{offline} 台\n"
+        f"📦 总数：{len(rows) + 1} 台\n\n"
+        "👇 每一排就是一台机器，点击进入详情。"
+    )
+    kb = target_buttons(include_local=True, cb_prefix="target")
+    kb.extend(bottom_nav([[{"text": "🔄 刷新列表", "callback_data": "nav:servers"}]]))
+    send_inline(chat_id, text, kb)
+
+
+def cmd_status(chat_id):
+    send_inline(chat_id, target_select_text("status"), target_select_keyboard("status"))
+
+
+def cmd_traffic(chat_id):
+    send_inline(chat_id, target_select_text("traffic"), target_select_keyboard("traffic"))
+
+
+def cmd_disk(chat_id):
+    send_inline(chat_id, target_select_text("disk"), target_select_keyboard("disk"))
+
+
+def cmd_events(chat_id):
+    send_inline(chat_id, target_select_text("events"), target_select_keyboard("events"))
+
+
+def cmd_edit_help(chat_id):
+    send_inline(chat_id, target_select_text("edit"), target_select_keyboard("edit"))
+
+
+def cmd_local_edit_help(chat_id):
+    send_inline(chat_id, (
+        "🏠✏️ <b>编辑本机资料</b> ✨\n\n"
+        "直接发送下面任意一种：\n\n"
+        "<code>编辑本机名称 Oracle主控机</code>\n"
+        "<code>编辑本机备注 新加坡主控节点</code>\n"
+        "<code>编辑本机到期 2027-05-01</code>\n"
+        "<code>编辑本机价格 38 CNY</code>\n"
+        "<code>编辑本机周期 年付</code>\n"
+        "<code>本机续费 2027-05-01</code>\n\n"
+        "📌 可以一次粘贴多条编辑命令。"
+    ), local_detail_keyboard())
+
+
+def server_edit_help_text(sid):
+    return (
+        "✏️✨ <b>编辑服务器</b> ✨✏️\n\n"
+        f"当前服务器 ID：<code>{h(sid)}</code>\n\n"
+        f"<code>编辑备注 {h(sid)} 新备注</code>\n"
+        f"<code>编辑到期 {h(sid)} 2027-05-01</code>\n"
+        f"<code>编辑价格 {h(sid)} 38 CNY</code>\n"
+        f"<code>编辑周期 {h(sid)} 年付</code>\n"
+        f"<code>编辑端口 {h(sid)} 443</code>\n"
+        f"<code>编辑名称 {h(sid)} HK-Oracle</code>\n"
+        f"<code>编辑系统 {h(sid)} Ubuntu 22.04</code>\n"
+        f"<code>编辑永久 {h(sid)} 是</code> / <code>编辑永久 {h(sid)} 否</code>\n"
+        f"<code>编辑自动续费 {h(sid)} 是</code> / <code>编辑自动续费 {h(sid)} 否</code>\n\n"
+        "👇 编辑后返回详情查看结果。"
+    )
+
+
+def local_traffic_text():
+    return "🌐✨ <b>本机流量</b> ✨🌐\n" + f"🕒 更新时间：{now_text()}\n\n" + traffic_block()
+
+
+def local_disk_text():
+    # Reuse old disk_text if present.
+    try:
+        return disk_text()
+    except Exception:
+        return "💾✨ <b>本机磁盘</b> ✨💾\n\n" + "获取失败"
+
+
+def remote_probe_required_text(r, kind):
+    icon = "🌐" if kind == "traffic" else "💾"
+    name = "流量" if kind == "traffic" else "磁盘"
+    return (
+        f"{icon}✨ <b>{h(r['name'])}｜{name}数据</b> ✨{icon}\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🖥️ 服务器：{h(r['name'])}\n"
+        f"🌐 地址：<code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📡 连通性：{'🟢 在线' if check_tcp(r['host'], r['check_port'], timeout=3) else '🔴 离线'}\n\n"
+        "📌 <b>说明：</b>主机器人只能检测端口在线/离线，无法隔空读取其它服务器的真实流量/磁盘。\n"
+        "✅ 要像哪吒/Y 探针一样查看真实数据，请先给这台服务器安装探针。\n\n"
+        "👇 下一步：点击 <b>一键部署探针</b>，复制命令到目标服务器 SSH 执行。"
+    )
+
+
+def target_events_text(target_type, sid=None):
+    rows = get_recent_events(30)
+    title = "本机事件" if target_type == "local" else "服务器事件"
+    filter_name = None
+    if target_type == "server" and sid:
+        r = get_server_row(sid)
+        filter_name = r["name"] if r else None
+        title = f"{filter_name or sid}｜事件"
+    out = [f"🧾✨ <b>{h(title)}</b> ✨🧾", f"🕒 更新时间：{now_text()}", ""]
+    icons = {"offline": "🚨", "online": "✅", "expiry": "⏰", "system": "🔥", "action": "🛠️", "security": "🛡️"}
+    count = 0
+    for ev in rows:
+        content = f"{ev['title']} {ev['content']}"
+        if target_type == "local":
+            # local/system events: include system/security/action not mentioning a remote server name.
+            if ev["event_type"] not in ["system", "security", "action"]:
+                continue
+        elif filter_name and filter_name not in content:
+            continue
+        out.append(f"{icons.get(ev['event_type'], '📌')} <b>{h(ev['title'])}</b>\n🕒 {h(ev['created_at'])}")
+        count += 1
+        if count >= 10:
+            break
+    if count == 0:
+        out.append("暂无该目标的事件记录。")
+    return "\n\n".join(out)[:3900]
+
+
+def cmd_check_servers(chat_id):
+    send_inline(chat_id, target_select_text("check"), target_select_keyboard("check"))
+
+
+def reminder_settings_text():
+    days = ",".join(str(x) for x in get_reminder_days())
+    return (
+        "⏰✨ <b>到期提醒设置</b> ✨⏰\n\n"
+        f"当前提前提醒天数：<code>{h(days)}</code>\n"
+        f"离线推送宽限期：<code>{OFFLINE_GRACE_SECONDS} 秒</code>\n\n"
+        "修改提醒天数直接发送：\n"
+        "<code>设置到期提醒 30,14,7,3,1,0</code>\n\n"
+        "说明：0 表示到期当天，负数不用手动设置，过期后系统会继续每日提醒。"
+    )
+
+
+def monitor_server_online_status():
+    """300s grace offline monitor, no repeated online spam."""
+    conn = db()
+    for col, definition in [
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("success_count", "INTEGER DEFAULT 0"),
+        ("notified_offline", "INTEGER DEFAULT 0"),
+        ("first_fail_at", "TEXT DEFAULT ''"),
+        ("first_recover_at", "TEXT DEFAULT ''"),
+    ]:
+        ensure_column(conn, "server_status", col, definition)
+    conn.commit()
+    rows = conn.execute("SELECT * FROM servers").fetchall()
+    now_dt = datetime.now()
+    now = now_text()
+    for r in rows:
+        sid = r["id"]
+        raw_online = check_tcp(r["host"], r["check_port"], timeout=5)
+        old = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+        if not old:
+            conn.execute(
+                "INSERT INTO server_status(server_id, last_status, last_checked_at, last_changed_at, fail_count, success_count, notified_offline, first_fail_at, first_recover_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (sid, "online" if raw_online else "unknown", now, now, 0 if raw_online else 1, 1 if raw_online else 0, 0, "" if raw_online else now, "")
+            )
+            conn.commit()
+            continue
+        old_status = old["last_status"] or "unknown"
+        notified = int(old["notified_offline"] if "notified_offline" in old.keys() and old["notified_offline"] is not None else 0)
+        first_fail_at = old["first_fail_at"] if "first_fail_at" in old.keys() and old["first_fail_at"] else ""
+        first_recover_at = old["first_recover_at"] if "first_recover_at" in old.keys() and old["first_recover_at"] else ""
+        try:
+            fail_elapsed = (now_dt - parse_date(first_fail_at)).total_seconds() if first_fail_at else 0
+        except Exception:
+            fail_elapsed = 0
+        try:
+            recover_elapsed = (now_dt - parse_date(first_recover_at)).total_seconds() if first_recover_at else 0
+        except Exception:
+            recover_elapsed = 0
+        if raw_online:
+            if old_status == "offline" and notified == 1:
+                if not first_recover_at:
+                    conn.execute("UPDATE server_status SET first_recover_at=?, last_checked_at=? WHERE server_id=?", (now, now, sid)); conn.commit()
+                elif recover_elapsed >= RECOVERY_STABLE_SECONDS:
+                    conn.execute("UPDATE server_status SET last_status='online', last_checked_at=?, last_changed_at=?, fail_count=0, success_count=1, notified_offline=0, first_fail_at='', first_recover_at='' WHERE server_id=?", (now, now, sid)); conn.commit()
+                    push_event("online", f"服务器恢复在线：{r['name']}", online_push_text(r))
+                else:
+                    conn.execute("UPDATE server_status SET last_checked_at=? WHERE server_id=?", (now, sid)); conn.commit()
+            else:
+                conn.execute("UPDATE server_status SET last_status='online', last_checked_at=?, fail_count=0, success_count=success_count+1, first_fail_at='', first_recover_at='' WHERE server_id=?", (now, sid)); conn.commit()
+        else:
+            if old_status != "offline":
+                if not first_fail_at:
+                    conn.execute("UPDATE server_status SET first_fail_at=?, last_checked_at=?, fail_count=1 WHERE server_id=?", (now, now, sid)); conn.commit()
+                elif fail_elapsed >= OFFLINE_GRACE_SECONDS:
+                    conn.execute("UPDATE server_status SET last_status='offline', last_checked_at=?, last_changed_at=?, fail_count=fail_count+1, success_count=0, notified_offline=1, first_recover_at='' WHERE server_id=?", (now, now, sid)); conn.commit()
+                    push_event("offline", f"服务器离线：{r['name']}", offline_push_text(r))
+                else:
+                    conn.execute("UPDATE server_status SET last_checked_at=?, fail_count=fail_count+1 WHERE server_id=?", (now, sid)); conn.commit()
+            else:
+                # Already offline, do not repeat offline alert.
+                conn.execute("UPDATE server_status SET last_checked_at=?, fail_count=fail_count+1, success_count=0, first_recover_at='' WHERE server_id=?", (now, sid)); conn.commit()
+    conn.close()
+
+
+def monitor_expiry():
+    conn = db(); rows = conn.execute("SELECT * FROM servers").fetchall(); today = datetime.now().date()
+    due_days = get_reminder_days()
+    for r in rows:
+        if is_free_forever_row(r) or not is_valid_date_text(r["expire_at"]):
+            continue
+        days = (parse_date(r["expire_at"]).date() - today).days
+        should = days in due_days or days < 0
+        if should:
+            # For expired servers, remind once per day rather than every poll.
+            key = f"{r['id']}:{days}:{today.isoformat()}" if days < 0 else f"{r['id']}:{days}"
+            old = conn.execute("SELECT 1 FROM reminders WHERE server_id=? AND remind_key=?", (r["id"], key)).fetchone()
+            if old: continue
+            push_event("expiry", f"到期提醒：{r['name']}", expiry_push_text(r, days))
+            conn.execute("INSERT OR REPLACE INTO reminders(server_id, remind_key, sent_at) VALUES(?,?,?)", (r["id"], key, now_text())); conn.commit()
+    conn.close()
+
+
+_old_handle_callback_ultra = handle_callback
+
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+        if not is_admin(chat_id):
+            answer_callback(callback_id, "未授权")
+            return
+        if data == "nav:dashboard":
+            answer_callback(callback_id, "已打开总览")
+            edit_inline_message(chat_id, message_id, compact_dashboard_text(), dashboard_inline_keyboard())
+            return
+        if data == "nav:servers":
+            answer_callback(callback_id, "已打开列表")
+            rows = get_all_servers(order="id")
+            online = sum(1 for r in rows if check_tcp(r["host"], r["check_port"], timeout=2))
+            offline = len(rows) - online
+            text = (
+                "📋✨ <b>选择机器</b> ✨📋\n"
+                f"🕒 更新时间：{now_text()}\n\n"
+                f"🏠 本机：1 台\n🟢 在线：{online + 1} 台\n🔴 离线：{offline} 台\n📦 总数：{len(rows)+1} 台\n\n"
+                "👇 点击本机或任意服务器进入详情。"
+            )
+            kb = target_buttons(include_local=True, cb_prefix="target") + bottom_nav([[{"text": "🔄 刷新列表", "callback_data": "nav:servers"}]])
+            edit_inline_message(chat_id, message_id, text, kb)
+            return
+        if data.startswith("target:"):
+            answer_callback(callback_id, "已打开详情")
+            parts = data.split(":")
+            if parts[1] == "local":
+                edit_inline_message(chat_id, message_id, local_detail_text(), local_detail_keyboard())
+                return
+            sid = parts[2]
+            r = get_server_row(sid)
+            if not r:
+                edit_inline_message(chat_id, message_id, "❌ 没有找到这个服务器。", bottom_nav())
+                return
+            edit_inline_message(chat_id, message_id, remote_detail_text(r), remote_detail_keyboard(sid))
+            return
+        if data.startswith("select:"):
+            action = data.split(":", 1)[1]
+            answer_callback(callback_id, "请选择目标")
+            edit_inline_message(chat_id, message_id, target_select_text(action), target_select_keyboard(action))
+            return
+        if data.startswith("view:"):
+            parts = data.split(":")
+            action = parts[1]
+            typ = parts[2]
+            answer_callback(callback_id, "已打开")
+            if typ == "local":
+                if action == "status" or action == "check":
+                    edit_inline_message(chat_id, message_id, local_detail_text(), local_detail_keyboard()); return
+                if action == "traffic":
+                    edit_inline_message(chat_id, message_id, local_traffic_text(), bottom_nav([[{"text": "💾 下一步：本机磁盘", "callback_data": "view:disk:local"}, {"text": "🏠 本机详情", "callback_data": "target:local"}]])); return
+                if action == "disk":
+                    edit_inline_message(chat_id, message_id, local_disk_text(), bottom_nav([[{"text": "🧾 下一步：本机事件", "callback_data": "view:events:local"}, {"text": "🏠 本机详情", "callback_data": "target:local"}]])); return
+                if action == "events":
+                    edit_inline_message(chat_id, message_id, target_events_text("local"), bottom_nav([[{"text": "🏠 本机详情", "callback_data": "target:local"}]])); return
+                if action == "edit":
+                    edit_inline_message(chat_id, message_id, "🏠✏️ <b>编辑本机</b>\n\n请选择下面按钮或直接发送编辑命令。", local_detail_keyboard()); cmd_local_edit_help(chat_id); return
+            if typ == "server" and len(parts) >= 4:
+                sid = parts[3]
+                r = get_server_row(sid)
+                if not r:
+                    edit_inline_message(chat_id, message_id, "❌ 没有找到这个服务器。", bottom_nav()); return
+                if action == "status" or action == "check":
+                    edit_inline_message(chat_id, message_id, remote_detail_text(r), remote_detail_keyboard(sid)); return
+                if action == "traffic":
+                    edit_inline_message(chat_id, message_id, remote_probe_required_text(r, "traffic"), bottom_nav([[{"text": "📡 一键部署探针", "callback_data": f"agent_cmd:{sid}"}, {"text": "🖥️ 服务器详情", "callback_data": f"target:server:{sid}"}]])); return
+                if action == "disk":
+                    edit_inline_message(chat_id, message_id, remote_probe_required_text(r, "disk"), bottom_nav([[{"text": "📡 一键部署探针", "callback_data": f"agent_cmd:{sid}"}, {"text": "🖥️ 服务器详情", "callback_data": f"target:server:{sid}"}]])); return
+                if action == "events":
+                    edit_inline_message(chat_id, message_id, target_events_text("server", sid), bottom_nav([[{"text": "🖥️ 服务器详情", "callback_data": f"target:server:{sid}"}]])); return
+                if action == "edit":
+                    edit_inline_message(chat_id, message_id, server_edit_help_text(sid), remote_detail_keyboard(sid)); return
+        if data == "nav:reminder":
+            answer_callback(callback_id, "提醒设置")
+            edit_inline_message(chat_id, message_id, reminder_settings_text(), bottom_nav())
+            return
+        if data == "nav:check":
+            answer_callback(callback_id, "请选择目标")
+            edit_inline_message(chat_id, message_id, target_select_text("check"), target_select_keyboard("check"))
+            return
+        if data == "nav:traffic":
+            answer_callback(callback_id, "请选择目标")
+            edit_inline_message(chat_id, message_id, target_select_text("traffic"), target_select_keyboard("traffic"))
+            return
+        if data == "nav:disk":
+            answer_callback(callback_id, "请选择目标")
+            edit_inline_message(chat_id, message_id, target_select_text("disk"), target_select_keyboard("disk"))
+            return
+        if data == "nav:events":
+            answer_callback(callback_id, "请选择目标")
+            edit_inline_message(chat_id, message_id, target_select_text("events"), target_select_keyboard("events"))
+            return
+        if data == "nav:tools":
+            answer_callback(callback_id, "工具")
+            edit_inline_message(chat_id, message_id, "🛠️✨ <b>工具</b> ✨🛠️\n\n请选择下一步。", bottom_nav([
+                [{"text": "🌍 刷新本机地区", "callback_data": "local:refresh_meta"}, {"text": "🌍 刷新全部地区", "callback_data": "servers:refresh_meta"}],
+                [{"text": "🔄 重启节点", "callback_data": "tool:restart"}, {"text": "🧹 清理缓存", "callback_data": "tool:cache"}],
+                [{"text": "⏰ 提醒设置", "callback_data": "nav:reminder"}],
+            ])); return
+        if data == "local:refresh_meta":
+            answer_callback(callback_id, "已刷新")
+            meta = detect_local_meta(force=True)
+            edit_inline_message(chat_id, message_id, "✅🌍 <b>本机国家地区已刷新</b>\n\n" + f"🌐 IP：<code>{h(meta.get('ip','未知'))}</code>\n📍 地区：{local_location_line(meta)}\n🏢 运营商：{h(meta.get('isp') or '未知')}", local_detail_keyboard())
+            return
+        if data == "tool:restart":
+            answer_callback(callback_id, "确认页")
+            edit_inline_message(chat_id, message_id, "⚠️🔄 <b>重启节点确认</b>\n\n确认重启 Xray / x-ui / 3x-ui 请发送：<code>确认重启</code>", bottom_nav())
+            return
+        if data == "tool:cache":
+            answer_callback(callback_id, "确认页")
+            edit_inline_message(chat_id, message_id, "⚠️🧹 <b>清理缓存确认</b>\n\n确认清理请发送：<code>确认清理</code>", bottom_nav())
+            return
+    except Exception as e:
+        try:
+            send(callback.get("message", {}).get("chat", {}).get("id"), f"❌ 按钮操作失败：{h(e)}")
+        except Exception:
+            pass
+        return
+    return _old_handle_callback_ultra(callback)
+
+
+_old_handle_ultra = handle
+
+def handle(chat_id, text):
+    ct = clean_command_text(text)
+    if ct.startswith("设置到期提醒"):
+        try:
+            v = ct.replace("设置到期提醒", "", 1).strip()
+            vals = set_reminder_days(v)
+            send_inline(chat_id, f"✅⏰ <b>到期提醒已更新</b>\n\n当前提醒天数：<code>{h(','.join(map(str, vals)))}</code>", bottom_nav())
+        except Exception as e:
+            send_inline(chat_id, f"❌ 设置失败：{h(e)}\n\n示例：<code>设置到期提醒 30,14,7,3,1,0</code>", bottom_nav())
+        return
+    if ct in ["服务器总览", "总览", "面板", "/dashboard"]:
+        cmd_dashboard(chat_id); return
+    if ct in ["查看服务器", "服务器列表", "选择服务器", "查看机器", "机器列表", "/servers", "/list_servers"]:
+        cmd_server_buttons(chat_id); return
+    if ct in ["查看状态", "服务器状态", "本机状态", "状态", "/status"]:
+        cmd_status(chat_id); return
+    if ct in ["查看流量", "流量", "网络流量", "服务器流量", "流量使用", "/traffic"]:
+        cmd_traffic(chat_id); return
+    if ct in ["查看磁盘", "磁盘", "磁盘状态", "磁盘使用", "/disk"]:
+        cmd_disk(chat_id); return
+    if ct in ["查看事件", "服务器事件", "事件记录", "事件", "/events"]:
+        cmd_events(chat_id); return
+    if ct in ["检测服务器", "检测在线", "检测机器", "在线检测", "/check_servers"]:
+        cmd_check_servers(chat_id); return
+    if ct in ["编辑服务器", "编辑机器", "/edit_server"]:
+        cmd_edit_help(chat_id); return
+    if ct in ["编辑本机", "编辑当前机器", "编辑当前服务器"]:
+        cmd_local_edit_help(chat_id); return
+    if ct in ["提醒设置", "到期提醒", "续费提醒"]:
+        send_inline(chat_id, reminder_settings_text(), bottom_nav()); return
+    return _old_handle_ultra(chat_id, text)
+
+
+# Re-finalize poll so the runtime uses the latest monitor/handlers above.
+def poll():
+    offset = 0
+    last_check = 0
+    set_bot_commands()
+    while True:
+        try:
+            now_ts = time.time()
+            if now_ts - last_check >= CHECK_INTERVAL:
+                monitor_local_system()
+                monitor_server_online_status()
+                auto_renew_expired_online_servers()
+                monitor_expiry()
+                last_check = now_ts
+            r = requests.get(f"{API}/getUpdates", params={"timeout": 10, "offset": offset}, timeout=15).json()
+            for item in r.get("result", []):
+                offset = item["update_id"] + 1
+                if item.get("callback_query"):
+                    handle_callback(item["callback_query"])
+                    continue
+                msg = item.get("message") or item.get("edited_message")
+                if not msg:
+                    continue
+                chat_id = msg["chat"]["id"]
+                text = msg.get("text", "").strip()
+                if text:
+                    handle(chat_id, text)
+        except KeyboardInterrupt:
+            break
+        except Exception:
+            time.sleep(3)
+
+
+
 if __name__ == "__main__":
     init_db()
     poll()
