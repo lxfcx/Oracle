@@ -4550,6 +4550,344 @@ def init_db():
     ensure_status_duration_columns()
 
 
+
+
+# ============================================================
+# FINAL AGENT METRICS RECEIVER PATCH
+# 真实在线运行时长说明：
+# 远程服务器真实 uptime 必须由探针上报。
+# 旧 agent 只会用 Bot Token 给 TG 发消息，主机器人收不到机器人自己发出的消息，
+# 所以面板不会变化。这里新增 HTTP 上报接收器 + 数据表 + 面板读取。
+# ============================================================
+
+def metrics_secret():
+    return os.getenv("METRICS_SECRET") or (BOT_TOKEN[-16:] if BOT_TOKEN else "server-monitor-secret")
+
+
+def metrics_port():
+    try:
+        return int(os.getenv("METRICS_PORT", "8765"))
+    except Exception:
+        return 8765
+
+
+def metrics_url_for_agent():
+    ip = get_public_ip() or "你的主控服务器公网IP"
+    return f"http://{ip}:{metrics_port()}/report"
+
+
+def ensure_metrics_table():
+    conn = db()
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS server_metrics (
+        server_id INTEGER PRIMARY KEY,
+        name TEXT DEFAULT '',
+        hostname TEXT DEFAULT '',
+        public_ip TEXT DEFAULT '',
+        uptime_seconds INTEGER DEFAULT 0,
+        boot_time TEXT DEFAULT '',
+        cpu_percent REAL DEFAULT 0,
+        mem_percent REAL DEFAULT 0,
+        disk_percent REAL DEFAULT 0,
+        rx_bytes INTEGER DEFAULT 0,
+        tx_bytes INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT '',
+        raw TEXT DEFAULT ''
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def save_agent_metrics(payload):
+    ensure_metrics_table()
+    sid = str(payload.get("server_id") or payload.get("sid") or "").strip()
+    if not sid.isdigit():
+        return False, "missing server_id"
+
+    conn = db()
+    row = conn.execute("SELECT id FROM servers WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return False, "server not found"
+
+    name = str(payload.get("name") or "")
+    hostname = str(payload.get("hostname") or "")
+    public_ip = str(payload.get("public_ip") or "")
+    boot_time = str(payload.get("boot_time") or "")
+    updated_at = now_text()
+
+    def to_int(v, default=0):
+        try:
+            return int(float(v))
+        except Exception:
+            return default
+
+    def to_float(v, default=0):
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    conn.execute("""
+    INSERT OR REPLACE INTO server_metrics(
+        server_id,name,hostname,public_ip,uptime_seconds,boot_time,cpu_percent,mem_percent,disk_percent,rx_bytes,tx_bytes,updated_at,raw
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        int(sid),
+        name,
+        hostname,
+        public_ip,
+        to_int(payload.get("uptime_seconds")),
+        boot_time,
+        to_float(payload.get("cpu_percent")),
+        to_float(payload.get("mem_percent")),
+        to_float(payload.get("disk_percent")),
+        to_int(payload.get("rx_bytes")),
+        to_int(payload.get("tx_bytes")),
+        updated_at,
+        json.dumps(payload, ensure_ascii=False)
+    ))
+    conn.commit()
+    conn.close()
+    return True, "ok"
+
+
+def get_agent_metrics(server_id):
+    ensure_metrics_table()
+    conn = db()
+    row = conn.execute("SELECT * FROM server_metrics WHERE server_id=?", (server_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def metrics_fresh(row, max_age=180):
+    if not row:
+        return False
+    try:
+        return (datetime.now() - parse_date(row["updated_at"])).total_seconds() <= max_age
+    except Exception:
+        return False
+
+
+def agent_runtime_line(r):
+    m = get_agent_metrics(r["id"])
+    if not m:
+        return "⏱️ 系统运行时长：未收到探针数据"
+    status = "🟢 探针在线" if metrics_fresh(m) else "🟠 探针超时"
+    return (
+        f"⏱️ 系统运行时长：{h(duration_from_seconds(m['uptime_seconds']))}\n"
+        f"🕒 系统开机时间：{h(m['boot_time'] or '未知')}\n"
+        f"📡 探针状态：{status}｜最后上报 {h(m['updated_at'] or '未知')}"
+    )
+
+
+def start_metrics_receiver():
+    if getattr(start_metrics_receiver, "_started", False):
+        return
+    start_metrics_receiver._started = True
+
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            return
+
+        def _send(self, code, body):
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+            except Exception:
+                pass
+
+        def do_GET(self):
+            if self.path.startswith("/health"):
+                self._send(200, {"ok": True, "service": "server-monitor-metrics"})
+            else:
+                self._send(404, {"ok": False, "error": "not found"})
+
+        def do_POST(self):
+            try:
+                if not self.path.startswith("/report"):
+                    self._send(404, {"ok": False, "error": "not found"})
+                    return
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                raw = self.rfile.read(min(length, 1024 * 256)).decode("utf-8", errors="ignore")
+                payload = json.loads(raw or "{}")
+                secret = str(payload.get("secret") or self.headers.get("X-Metrics-Secret") or "")
+                if secret != metrics_secret():
+                    self._send(403, {"ok": False, "error": "bad secret"})
+                    return
+                ok, msg = save_agent_metrics(payload)
+                self._send(200 if ok else 400, {"ok": ok, "message": msg})
+            except Exception as e:
+                self._send(500, {"ok": False, "error": str(e)})
+
+    def run():
+        try:
+            ensure_metrics_table()
+            srv = ThreadingHTTPServer(("0.0.0.0", metrics_port()), MetricsHandler)
+            print(f"[METRICS] receiver started on 0.0.0.0:{metrics_port()}", flush=True)
+            srv.serve_forever()
+        except Exception as e:
+            print(f"[METRICS] receiver failed: {e}", flush=True)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def agent_install_command(server_name="server", sid=None):
+    admin_id = next(iter(ADMIN_IDS), "你的TG数字ID")
+    token = BOT_TOKEN or "你的TG_BOT_TOKEN"
+    safe_name = str(server_name or "server").replace('"', '').replace("'", "")
+    sid_arg = str(sid or "0")
+    return (
+        "wget -qO- https://raw.githubusercontent.com/lxfcx/Oracle/main/agent.sh | "
+        f"bash -s -- --url \"{metrics_url_for_agent()}\" --secret \"{metrics_secret()}\" "
+        f"--sid \"{sid_arg}\" --token \"{token}\" --chat \"{admin_id}\" --name \"{safe_name}\""
+    )
+
+
+def cmd_agent_command(chat_id, sid=None):
+    server_name = "server"
+    title = "📡✨ <b>一键部署探针命令</b> ✨📡"
+    real_sid = None
+    if sid:
+        r = get_server_row(sid)
+        if r:
+            real_sid = r["id"]
+            server_name = r["name"]
+            title = f"📡✨ <b>{h(server_name)} 一键部署探针</b> ✨📡"
+    cmd = agent_install_command(server_name, real_sid)
+    send_inline(chat_id, (
+        f"{title}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "📌 <b>用途：</b>复制下面命令到对应服务器 SSH 执行。\n"
+        "📌 <b>效果：</b>探针会每 60 秒向主机器人上报真实 uptime、CPU、内存、磁盘、流量。\n"
+        "📌 <b>重要：</b>主控服务器需要放行 TCP 端口 "
+        f"<code>{metrics_port()}</code>，否则探针无法上报。\n"
+        "📌 <b>测试：</b>部署后返回服务器详情，等待 1 分钟查看 <code>系统运行时长</code> 是否更新。\n"
+        "━━━━━━━━━━━━━━\n\n"
+        f"<code>{h(cmd)}</code>"
+    ), [[{"text": "⬅️ 返回服务器列表", "callback_data": "nav:servers"}, {"text": "📊 返回总览", "callback_data": "nav:dashboard"}]])
+
+
+def server_button_label(r):
+    online = check_tcp(r["host"], r["check_port"], timeout=3)
+    status = "🟢" if online else "🔴"
+    flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+    free = "🎁" if is_free_forever_row(r) else ""
+    auto = "🔁" if is_auto_renew_row(r) else ""
+    countdown = renew_countdown_text(r["expire_at"], is_free_forever_row(r)) if "renew_countdown_text" in globals() else expire_status_text(r["expire_at"], is_free_forever_row(r))
+    m = get_agent_metrics(r["id"])
+    if m:
+        runtime = duration_from_seconds(m["uptime_seconds"])
+        probe = "🟢" if metrics_fresh(m) else "🟠"
+        run_text = f"{probe}运行 {runtime}"
+    else:
+        run_text = "⚪未装探针"
+    return f"{status} {flag}{free}{auto} ID{r['id']}｜{r['name']}｜{run_text}｜续费 {countdown}"
+
+
+def remote_detail_text(r):
+    online = check_tcp(r["host"], r["check_port"], timeout=3)
+    status_text = "🟢 在线" if online else "🔴 离线"
+    free = is_free_forever_row(r)
+    auto = is_auto_renew_row(r)
+    m = get_agent_metrics(r["id"])
+    countdown = renew_countdown_text(r["expire_at"], free) if "renew_countdown_text" in globals() else expire_status_text(r["expire_at"], free)
+
+    probe_extra = ""
+    if m:
+        probe_extra = (
+            f"\n📊 探针 CPU：{m['cpu_percent']:.0f}%"
+            f"\n🧠 探针内存：{m['mem_percent']:.0f}%"
+            f"\n💾 探针磁盘：{m['disk_percent']:.0f}%"
+            f"\n🌐 探针流量：⬇️{fmt_size(m['rx_bytes'])} / ⬆️{fmt_size(m['tx_bytes'])}"
+        )
+    else:
+        probe_extra = "\n📡 探针数据：未收到，请重新点击“📡 探针”部署新版探针"
+
+    return (
+        "🖥️✨ <b>服务器详情</b> ✨🖥️\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📡 状态：{status_text}\n"
+        f"{agent_runtime_line(r)}"
+        f"{probe_extra}\n"
+        f"🆔 ID：<code>{r['id']}</code>\n"
+        f"🖥️ 名称：{h(r['name'])}\n"
+        f"🌐 主机：<code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📍 地区：{server_location_line(r)}\n"
+        f"🏢 运营商：{h(r['isp'] if 'isp' in r.keys() and r['isp'] else '未知')}\n"
+        f"🧬 系统：{h(r['os_name'] if 'os_name' in r.keys() and r['os_name'] else '未知系统')}\n"
+        f"📝 备注：{h(r['note'] or '无')}\n"
+        f"🎁 永久免费：{bool_text(free)}\n"
+        f"🔁 自动续费：{bool_text(auto)}\n"
+        f"💰 价格：{server_price_line(r)}\n"
+        f"📆 到期：{h(r['expire_at'] if r['expire_at'] else '未设置')}｜{expire_status_text(r['expire_at'], free)}\n"
+        f"⏳ 续费倒计时：{h(countdown)}\n"
+        "━━━━━━━━━━━━━━\n"
+        "👇 <b>下一步：</b>查看该服务器流量/磁盘/事件，或编辑续费。"
+    )[:3900]
+
+
+def servers_summary_block():
+    ensure_metrics_table()
+    refresh_missing_meta()
+    rows = get_all_servers(order="id") if "get_all_servers" in globals() else []
+    if not rows:
+        conn = db()
+        rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+        conn.close()
+    if not rows:
+        return "📡 <b>服务器在线情况</b>\n━━━━━━━━━━━━━━\n📭 暂无服务器记录。\n发送 <code>添加服务器</code> 开始添加。"
+    online_count = 0
+    offline_count = 0
+    lines = []
+    for r in rows:
+        online = check_tcp(r["host"], r["check_port"], timeout=3)
+        countdown = renew_countdown_text(r["expire_at"], is_free_forever_row(r)) if "renew_countdown_text" in globals() else expire_status_text(r["expire_at"], is_free_forever_row(r))
+        if online:
+            online_count += 1
+            status = "🟢 在线"
+        else:
+            offline_count += 1
+            status = "🔴 离线"
+        m = get_agent_metrics(r["id"])
+        if m:
+            run_text = f"运行 {duration_from_seconds(m['uptime_seconds'])}"
+            probe = "🟢" if metrics_fresh(m) else "🟠"
+        else:
+            run_text = "未收到探针"
+            probe = "⚪"
+        flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+        lines.append(f"{status}｜{flag} {h(r['name'])}｜{probe}{h(run_text)}｜续费 {h(countdown)}")
+    return (
+        "📡 <b>服务器在线情况</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🟢 在线：{online_count} 台\n"
+        f"🔴 离线：{offline_count} 台\n"
+        f"📦 总数：{len(rows)} 台\n\n" + "\n".join(lines[:12])
+    )
+
+
+_old_poll_metrics_receiver = poll
+
+def poll():
+    start_metrics_receiver()
+    return _old_poll_metrics_receiver()
+
+
+_old_init_db_metrics_receiver = init_db
+
+def init_db():
+    _old_init_db_metrics_receiver()
+    ensure_metrics_table()
+
+
 if __name__ == "__main__":
     init_db()
     poll()
