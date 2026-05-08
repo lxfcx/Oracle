@@ -8,6 +8,7 @@ import sqlite3
 import socket
 import subprocess
 import ipaddress
+import traceback
 from datetime import datetime, timedelta
 
 import psutil
@@ -134,8 +135,17 @@ def init_db():
 
 def tg(method, payload=None):
     try:
-        return requests.post(f"{API}/{method}", json=payload or {}, timeout=20).json()
-    except Exception:
+        r = requests.post(f"{API}/{method}", json=payload or {}, timeout=20)
+        try:
+            data = r.json()
+        except Exception:
+            data = {"ok": False, "description": r.text[:500]}
+        if not data.get("ok") and method not in ["answerCallbackQuery"]:
+            print(f"[TG ERROR] {method}: {data}", flush=True)
+        return data
+    except Exception as e:
+        print(f"[TG EXCEPTION] {method}: {e}", flush=True)
+        traceback.print_exc()
         return {}
 
 
@@ -3283,36 +3293,87 @@ def handle(chat_id, text):
 
 
 # Re-finalize poll so the runtime uses the latest monitor/handlers above.
+
 def poll():
+    """
+    秒回优先版：
+    1. 启动时先删除 webhook，避免 getUpdates 被 webhook 占用。
+    2. 每轮先读取/处理 TG 消息，再做监控任务。
+    3. getUpdates timeout 设为 1 秒，减少等待。
+    4. 错误直接打印到 journalctl，方便排查“没反应”。
+    """
     offset = 0
     last_check = 0
+
+    print("[BOT] starting server-monitor-bot...", flush=True)
+    print(f"[BOT] admins={','.join(ADMIN_IDS) or 'EMPTY'} token={'SET' if BOT_TOKEN else 'EMPTY'}", flush=True)
+
+    tg("deleteWebhook", {"drop_pending_updates": False})
     set_bot_commands()
+
     while True:
         try:
-            now_ts = time.time()
-            if now_ts - last_check >= CHECK_INTERVAL:
-                monitor_local_system()
-                monitor_server_online_status()
-                auto_renew_expired_online_servers()
-                monitor_expiry()
-                last_check = now_ts
-            r = requests.get(f"{API}/getUpdates", params={"timeout": 10, "offset": offset}, timeout=15).json()
-            for item in r.get("result", []):
+            # 先处理用户消息，保证点击/发送命令尽快响应
+            r = requests.get(
+                f"{API}/getUpdates",
+                params={"timeout": 1, "offset": offset, "allowed_updates": json.dumps(["message", "edited_message", "callback_query"])},
+                timeout=5
+            )
+
+            try:
+                data = r.json()
+            except Exception:
+                print(f"[BOT] getUpdates non-json: {r.text[:500]}", flush=True)
+                time.sleep(1)
+                continue
+
+            if not data.get("ok"):
+                print(f"[BOT] getUpdates error: {data}", flush=True)
+                # 409 通常是另一个进程或 webhook 占用
+                if "Conflict" in str(data) or data.get("error_code") == 409:
+                    time.sleep(3)
+                else:
+                    time.sleep(1)
+                continue
+
+            for item in data.get("result", []):
                 offset = item["update_id"] + 1
+
                 if item.get("callback_query"):
                     handle_callback(item["callback_query"])
                     continue
+
                 msg = item.get("message") or item.get("edited_message")
                 if not msg:
                     continue
+
                 chat_id = msg["chat"]["id"]
                 text = msg.get("text", "").strip()
+
+                print(f"[BOT] message chat_id={chat_id} text={text[:80]!r}", flush=True)
+
                 if text:
                     handle(chat_id, text)
+
+            # 再做后台监控，避免监控卡住用户命令
+            now_ts = time.time()
+            if now_ts - last_check >= CHECK_INTERVAL:
+                try:
+                    monitor_local_system()
+                    monitor_server_online_status()
+                    auto_renew_expired_online_servers()
+                    monitor_expiry()
+                except Exception as e:
+                    print(f"[BOT] monitor error: {e}", flush=True)
+                    traceback.print_exc()
+                last_check = now_ts
+
         except KeyboardInterrupt:
             break
-        except Exception:
-            time.sleep(3)
+        except Exception as e:
+            print(f"[BOT] loop error: {e}", flush=True)
+            traceback.print_exc()
+            time.sleep(1)
 
 
 
