@@ -3,23 +3,23 @@ set -e
 
 APP_DIR="/opt/server-monitor-agent"
 SERVICE_NAME="server-monitor-agent"
+
 URL=""
 SECRET=""
 SID=""
 NAME="server"
-BOT_TOKEN=""
-CHAT_ID=""
 INTERVAL="60"
 
+# 兼容旧命令参数：--token / --chat 会被接收但不会使用，避免探针自己发 TG 消息。
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2 ;;
     --secret) SECRET="$2"; shift 2 ;;
     --sid) SID="$2"; shift 2 ;;
     --name) NAME="$2"; shift 2 ;;
-    --token) BOT_TOKEN="$2"; shift 2 ;;
-    --chat) CHAT_ID="$2"; shift 2 ;;
     --interval) INTERVAL="$2"; shift 2 ;;
+    --token) shift 2 ;;
+    --chat) shift 2 ;;
     *) shift ;;
   esac
 done
@@ -38,14 +38,17 @@ mkdir -p "$APP_DIR"
 
 cat > "$APP_DIR/agent.py" <<'PY'
 #!/usr/bin/env python3
-import os, time, json, socket, urllib.request, subprocess
+import os
+import time
+import json
+import socket
+import urllib.request
+import subprocess
 
 URL = os.environ.get("AGENT_URL", "")
 SECRET = os.environ.get("AGENT_SECRET", "")
 SID = os.environ.get("SERVER_ID", "")
 NAME = os.environ.get("SERVER_NAME", "server")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-CHAT_ID = os.environ.get("CHAT_ID", "")
 INTERVAL = int(os.environ.get("INTERVAL", "60"))
 
 def sh(cmd):
@@ -143,17 +146,6 @@ def post_json(url, data):
     with urllib.request.urlopen(req, timeout=10) as r:
         return r.read().decode(errors="ignore")
 
-def tg_send(text):
-    if not BOT_TOKEN or not CHAT_ID:
-        return
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = json.dumps({"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}).encode()
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=8).read()
-    except Exception:
-        pass
-
 def collect():
     up = uptime_seconds()
     rx, tx = net_bytes()
@@ -181,12 +173,19 @@ def collect():
     }
 
 def main():
-    tg_send(f"✅📡 <b>探针已启动</b>\n\n🖥️ {NAME}\n🆔 ID：{SID}\n⚙️ 已启用配置上报：CPU核心 / 内存总量 / 硬盘总量\n🌐 上报地址：<code>{URL}</code>")
+    print("server-monitor-agent started silently; no Telegram startup push", flush=True)
     while True:
         try:
             data = collect()
             post_json(URL, data)
-            print("report ok", time.strftime("%F %T"), "cores", data.get("cpu_cores"), "mem", data.get("mem_total"), "disk", data.get("disk_total"), flush=True)
+            print(
+                "report ok",
+                time.strftime("%F %T"),
+                "sid", SID,
+                "uptime", data.get("uptime_seconds"),
+                "cpu_cores", data.get("cpu_cores"),
+                flush=True
+            )
         except Exception as e:
             print("report failed", e, flush=True)
         time.sleep(INTERVAL)
@@ -209,8 +208,6 @@ Environment="AGENT_URL=$URL"
 Environment="AGENT_SECRET=$SECRET"
 Environment="SERVER_ID=$SID"
 Environment="SERVER_NAME=$NAME"
-Environment="BOT_TOKEN=$BOT_TOKEN"
-Environment="CHAT_ID=$CHAT_ID"
 Environment="INTERVAL=$INTERVAL"
 ExecStart=/usr/bin/python3 $APP_DIR/agent.py
 Restart=always
@@ -225,5 +222,7 @@ systemctl enable --now "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
 echo "✅ 探针安装/更新完成"
+echo "📌 新版探针为静默上报，不会再推送“探针已启动”到 TG"
+echo "📌 离线/恢复在线通知由主机器人统一推送"
 echo "📌 查看状态：systemctl status $SERVICE_NAME --no-pager -l"
 echo "📌 查看日志：journalctl -u $SERVICE_NAME -f"
