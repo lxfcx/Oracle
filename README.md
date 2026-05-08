@@ -1,7 +1,11 @@
 # 🤖✨ Telegram Server Monitor Bot ✨🤖
 
 > 漂亮实用的中文 Telegram 服务器监控机器人  
-> 支持本机状态、服务器在线/离线监控、到期提醒、价格备注管理、自动续费、国家地区识别、国旗显示、流量磁盘查看、事件记录、探针部署等功能。
+> 支持本机状态、远程服务器探针、在线/离线告警、到期提醒、续费管理、价格备注管理、国家地区识别、国旗显示、CPU/内存/硬盘配置显示、流量/磁盘监控、事件记录、一键部署探针等功能。
+
+<p align="center">
+  <b>🖥️ Server Monitor ｜ 📡 Agent Probe ｜ 🚨 Alert ｜ ⏰ Expiry Reminder ｜ 🌍 Geo IP ｜ 💰 Renewal Manager</b>
+</p>
 
 ---
 
@@ -19,15 +23,15 @@
 
 ### 🖥️ 本机监控
 
-- ✅ 查看当前机器状态
+- ✅ 查看当前主控机器状态
 - 🌍 自动识别公网 IP
 - 🇺🇸 自动显示国家 / 地区 / 城市 / 国旗
 - 🏢 显示运营商 ISP
 - 🧬 显示系统版本
-- 📊 CPU 使用率
-- 🧠 内存使用情况
-- 💾 磁盘使用情况
-- 🌐 网络流量统计
+- 🧩 显示 CPU 核心数
+- 🧠 显示内存使用情况
+- 💾 显示磁盘使用情况
+- 🌐 显示网络流量统计
 - 🏷️ 支持编辑本机名称
 - 📝 支持编辑本机备注
 - 💰 支持编辑本机价格
@@ -36,7 +40,33 @@
 
 ---
 
-### 📡 远程服务器管理
+### 📡 远程服务器探针监控
+
+远程服务器安装探针后，可自动上报真实服务器数据：
+
+- 🟢 在线状态
+- 🔴 离线状态
+- ⏱️ 系统真实运行时长
+- 🕒 系统开机时间
+- 🧩 CPU 核心数
+- 🧠 内存总量 / 使用量 / 使用率
+- 💾 硬盘总量 / 使用量 / 使用率
+- 📊 CPU 使用率
+- 🌐 累计下载 / 上传流量
+- 📡 探针最后上报时间
+- 🟢 探针在线 / 🟠 探针超时
+
+效果示例：
+
+```text
+🧩 4 Cores ｜ 🧠 23.4GB ｜ 💾 146.6GB
+⏱️ 系统运行时长：15 天 3 小时 20 分钟
+🕒 系统开机时间：2026-04-23 11:20:03
+```
+
+---
+
+### 🖥️ 远程服务器管理
 
 - ✅ 添加远程服务器
 - 📋 查看服务器列表
@@ -185,6 +215,23 @@ BOT_TOKEN="你的TG_BOT_TOKEN" ADMIN_IDS="你的TG数字ID" AUTO_INSTALL=1 bash 
 
 ```text
 123456789,987654321
+```
+
+---
+
+### 📡 探针上报端口
+
+新版探针默认通过主控机器人接收数据：
+
+```text
+端口：8765/tcp
+```
+
+如果服务器开启了防火墙，需要放行：
+
+```bash
+ufw allow 8765/tcp 2>/dev/null || true
+iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>/dev/null || true
 ```
 
 ---
@@ -499,10 +546,50 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lxfcx/Oracle/main/uninstall.
 探针可用于：
 
 - 📡 更准确的实时状态监控
+- ⏱️ 自动读取真实系统运行时长
+- 🧩 自动读取 CPU 核心数
+- 🧠 自动读取内存总量
+- 💾 自动读取硬盘总量
 - 🌐 远程服务器流量监控
 - 💾 远程服务器磁盘监控
 - 🚨 异常状态推送
 - ✅ 恢复状态推送
+
+---
+
+## 🔍 探针排查命令
+
+### 查看探针状态
+
+```bash
+systemctl status server-monitor-agent --no-pager -l
+```
+
+### 查看探针日志
+
+```bash
+journalctl -u server-monitor-agent -n 100 --no-pager
+```
+
+### 重启探针
+
+```bash
+systemctl restart server-monitor-agent
+```
+
+### 测试主控接收端口
+
+在远程服务器执行：
+
+```bash
+curl -s http://主控服务器公网IP:8765/health
+```
+
+正常会返回：
+
+```json
+{"ok": true, "service": "server-monitor-metrics"}
+```
 
 ---
 
@@ -621,6 +708,29 @@ journalctl -u server-monitor-bot -n 120 --no-pager
 - ❌ Python 语法错误
 - ❌ 同一个 Bot Token 被其它程序占用
 - ❌ 服务器无法访问 Telegram API
+
+---
+
+### 探针数据显示未知怎么办？
+
+先确认远程服务器探针是否运行：
+
+```bash
+systemctl status server-monitor-agent --no-pager -l
+```
+
+再确认远程服务器能访问主控端口：
+
+```bash
+curl -s http://主控服务器公网IP:8765/health
+```
+
+如果无法访问，需要在主控服务器放行端口：
+
+```bash
+ufw allow 8765/tcp 2>/dev/null || true
+iptables -I INPUT -p tcp --dport 8765 -j ACCEPT 2>/dev/null || true
+```
 
 ---
 
