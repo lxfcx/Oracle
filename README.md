@@ -123,6 +123,7 @@
 启用命令
 🚀 一键安装
 方式一：菜单安装
+</> bash
 bash <(curl -fsSL https://raw.githubusercontent.com/lxfcx/Oracle/main/install.sh)
 
 运行后会出现菜单：
