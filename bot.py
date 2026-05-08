@@ -2421,6 +2421,217 @@ def handle_callback(callback):
     return _original_handle_callback(callback)
 
 
+
+# ============================================================
+# Final optimization overrides: quiet keyboard, stable online/offline,
+# dashboard server buttons, and per-server probe deployment command.
+# ============================================================
+
+# 1) Do not attach the large Chinese keyboard to every message.
+#    Only functions that explicitly pass keyboard=True will show it.
+def send(chat_id, text, keyboard=False):
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    if keyboard:
+        payload["reply_markup"] = menu_keyboard()
+    return tg("sendMessage", payload)
+
+
+def broadcast(text):
+    for admin in ADMIN_IDS:
+        send(admin, text, keyboard=False)
+
+
+_old_init_db_final = init_db
+def init_db():
+    _old_init_db_final()
+    conn = db()
+    # Debounce columns prevent repeated online/offline spam caused by network jitter.
+    for col, definition in [
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("success_count", "INTEGER DEFAULT 0"),
+        ("notified_offline", "INTEGER DEFAULT 0"),
+    ]:
+        ensure_column(conn, "server_status", col, definition)
+    conn.commit()
+    conn.close()
+
+
+def monitor_server_online_status():
+    """Stable online/offline monitor.
+
+    - Requires 2 consecutive failures before sending offline alert.
+    - Requires 2 consecutive successes after a notified offline alert before sending recovery.
+    - Never sends repeated online messages while the server remains online.
+    """
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers").fetchall()
+    for r in rows:
+        sid = r["id"]
+        raw_online = check_tcp(r["host"], r["check_port"])
+        old = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+        now = now_text()
+
+        if not old:
+            conn.execute(
+                "INSERT INTO server_status(server_id, last_status, last_checked_at, last_changed_at, fail_count, success_count, notified_offline) VALUES(?,?,?,?,?,?,?)",
+                (sid, "online" if raw_online else "offline", now, now, 0 if raw_online else 1, 1 if raw_online else 0, 0)
+            )
+            conn.commit()
+            continue
+
+        old_status = old["last_status"] or "unknown"
+        fail_count = int(old["fail_count"] if "fail_count" in old.keys() and old["fail_count"] is not None else 0)
+        success_count = int(old["success_count"] if "success_count" in old.keys() and old["success_count"] is not None else 0)
+        notified_offline = int(old["notified_offline"] if "notified_offline" in old.keys() and old["notified_offline"] is not None else 0)
+
+        if raw_online:
+            success_count += 1
+            fail_count = 0
+            if old_status == "offline" and notified_offline == 1 and success_count >= 2:
+                conn.execute(
+                    "UPDATE server_status SET last_status='online', last_checked_at=?, last_changed_at=?, fail_count=?, success_count=?, notified_offline=0 WHERE server_id=?",
+                    (now, now, fail_count, success_count, sid)
+                )
+                conn.commit()
+                push_event("online", f"服务器恢复在线：{r['name']}", online_push_text(r))
+            else:
+                # If it was unknown/offline but no offline alert was sent, silently mark stable online.
+                new_status = "online" if success_count >= 2 else old_status
+                conn.execute(
+                    "UPDATE server_status SET last_status=?, last_checked_at=?, fail_count=?, success_count=? WHERE server_id=?",
+                    (new_status, now, fail_count, success_count, sid)
+                )
+                conn.commit()
+        else:
+            fail_count += 1
+            success_count = 0
+            if old_status != "offline" and fail_count >= 2:
+                conn.execute(
+                    "UPDATE server_status SET last_status='offline', last_checked_at=?, last_changed_at=?, fail_count=?, success_count=?, notified_offline=1 WHERE server_id=?",
+                    (now, now, fail_count, success_count, sid)
+                )
+                conn.commit()
+                push_event("offline", f"服务器离线：{r['name']}", offline_push_text(r))
+            else:
+                conn.execute(
+                    "UPDATE server_status SET last_checked_at=?, fail_count=?, success_count=? WHERE server_id=?",
+                    (now, fail_count, success_count, sid)
+                )
+                conn.commit()
+    conn.close()
+
+
+def dashboard_inline_keyboard():
+    rows = get_all_servers()
+    kb = []
+    if rows:
+        kb.append([{"text": "📋 下一步：选择服务器", "callback_data": "nav:servers"}])
+        kb.extend(build_server_button_rows(rows, limit=12))
+    else:
+        kb.append([{"text": "🧾 下一步：添加服务器", "callback_data": "nav:add"}])
+    kb.extend([
+        [{"text": "🖥️ 本机状态", "callback_data": "nav:status"}, {"text": "🌐 流量", "callback_data": "nav:traffic"}, {"text": "💾 磁盘", "callback_data": "nav:disk"}],
+        [{"text": "📡 检测服务器", "callback_data": "nav:check"}, {"text": "🧾 添加服务器", "callback_data": "nav:add"}],
+        [{"text": "🧾 事件记录", "callback_data": "nav:events"}, {"text": "🛡️ 安全状态", "callback_data": "nav:security"}],
+    ])
+    return kb
+
+
+def server_detail_keyboard(sid):
+    return [
+        [{"text": "📡 一键部署探针", "callback_data": f"agent_cmd:{sid}"}],
+        [{"text": "✏️ 编辑说明", "callback_data": f"server_edit:{sid}"}, {"text": "⏰ 续费说明", "callback_data": f"server_renew_help:{sid}"}],
+        [{"text": "📆 月付+1月", "callback_data": f"renew_month:{sid}"}, {"text": "🗓️ 季付+3月", "callback_data": f"renew_quarter:{sid}"}, {"text": "📅 年付+1年", "callback_data": f"renew_year:{sid}"}],
+        [{"text": "🎁 永久免费 开/关", "callback_data": f"toggle_free:{sid}"}, {"text": "🔁 自动续费 开/关", "callback_data": f"toggle_auto:{sid}"}],
+        [{"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"}, {"text": "🗑️ 删除确认", "callback_data": f"delete_confirm:{sid}"}],
+        [{"text": "⬅️ 上一步：服务器列表", "callback_data": "nav:servers"}, {"text": "📊 返回总览", "callback_data": "nav:dashboard"}],
+    ]
+
+
+def agent_install_command(server_name="server"):
+    admin_id = next(iter(ADMIN_IDS), "你的TG数字ID")
+    token = BOT_TOKEN or "你的TG_BOT_TOKEN"
+    safe_name = str(server_name or "server").replace('"', '').replace("'", "")
+    return (
+        "wget -qO- https://raw.githubusercontent.com/lxfcx/Oracle/main/agent.sh | "
+        f"bash -s -- --token \"{token}\" --chat \"{admin_id}\" --name \"{safe_name}\""
+    )
+
+
+def cmd_agent_command(chat_id, sid=None):
+    server_name = "server"
+    title = "📡✨ <b>一键部署探针命令</b> ✨📡"
+    if sid:
+        r = get_server_row(sid)
+        if r:
+            server_name = r["name"]
+            title = f"📡✨ <b>{h(server_name)} 一键部署探针</b> ✨📡"
+    cmd = agent_install_command(server_name)
+    send_inline(chat_id, (
+        f"{title}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "📌 <b>用途：</b>复制下面命令到对应服务器 SSH 执行。\n"
+        "📌 <b>效果：</b>目标服务器会安装轻量探针，直接向 TG 推送上线、磁盘/内存/CPU 告警。\n"
+        "📌 <b>说明：</b>主机器人当前的在线/离线检测仍使用端口检测；真正类似探针的实时状态需要在每台服务器安装这个 Agent。\n"
+        "━━━━━━━━━━━━━━\n\n"
+        f"<code>{h(cmd)}</code>"
+    ), [[{"text": "⬅️ 返回服务器列表", "callback_data": "nav:servers"}, {"text": "📊 返回总览", "callback_data": "nav:dashboard"}]])
+
+
+def cmd_enable_commands(chat_id):
+    result = set_bot_commands()
+    send(chat_id, (
+        "✅✨ <b>中文按钮菜单已启用</b> ✨✅\n\n"
+        "📌 下方中文按钮键盘只在这里显示。\n"
+        "📌 其它功能页面改为使用页面内按钮，不会每条消息都附带一模一样的大键盘。\n\n"
+        "常用：\n"
+        "📊 <code>服务器总览</code>\n"
+        "📋 <code>查看服务器</code>\n"
+        "📡 <code>部署命令</code>\n"
+        "🧾 <code>添加服务器</code>\n"
+        "⌨️ <code>收起键盘</code>\n\n"
+        f"左侧命令菜单设置结果：<code>{h(result.get('ok'))}</code>"
+    ), keyboard=True)
+
+
+_old_handle_final = handle
+def handle(chat_id, text):
+    ct = clean_command_text(text)
+    if ct in ["部署命令", "探针命令", "一键部署命令", "/agent", "/agent_command"]:
+        cmd_agent_command(chat_id)
+        return
+    if ct.startswith(("部署命令 ", "探针命令 ", "一键部署命令 ")):
+        parts = ct.split(maxsplit=1)
+        cmd_agent_command(chat_id, parts[1].strip())
+        return
+    _old_handle_final(chat_id, text)
+
+
+_old_handle_callback_final = handle_callback
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+        if data.startswith("agent_cmd:"):
+            if not is_admin(chat_id):
+                answer_callback(callback_id, "未授权")
+                return
+            answer_callback(callback_id, "已生成部署命令")
+            sid = data.split(":", 1)[1]
+            cmd_agent_command(chat_id, sid)
+            return
+    except Exception:
+        pass
+    return _old_handle_callback_final(callback)
+
+
 def poll():
     offset = 0
     last_check = 0
