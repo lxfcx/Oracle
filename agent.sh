@@ -38,7 +38,7 @@ mkdir -p "$APP_DIR"
 
 cat > "$APP_DIR/agent.py" <<'PY'
 #!/usr/bin/env python3
-import os, time, json, socket, urllib.request, urllib.error, subprocess
+import os, time, json, socket, urllib.request, subprocess
 
 URL = os.environ.get("AGENT_URL", "")
 SECRET = os.environ.get("AGENT_SECRET", "")
@@ -50,7 +50,7 @@ INTERVAL = int(os.environ.get("INTERVAL", "60"))
 
 def sh(cmd):
     try:
-        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=5).decode(errors="ignore").strip()
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=8).decode(errors="ignore").strip()
     except Exception:
         return ""
 
@@ -66,30 +66,40 @@ def boot_time_text(up):
     except Exception:
         return ""
 
-def mem_percent():
+def cpu_cores():
+    try:
+        return os.cpu_count() or int(sh("nproc") or "0")
+    except Exception:
+        return 0
+
+def mem_info():
     try:
         data = {}
         for line in open("/proc/meminfo"):
             k, v = line.split(":", 1)
-            data[k] = int(v.strip().split()[0])
+            data[k] = int(v.strip().split()[0]) * 1024
         total = data.get("MemTotal", 0)
         avail = data.get("MemAvailable", 0)
-        return round((total - avail) * 100 / total, 1) if total else 0
+        used = max(0, total - avail)
+        percent = round(used * 100 / total, 1) if total else 0
+        return total, used, percent
     except Exception:
-        return 0
+        return 0, 0, 0
 
-def disk_percent():
-    out = sh("df -P / | awk 'NR==2{gsub(/%/,\"\",$5);print $5}'")
+def disk_info():
     try:
-        return float(out)
+        st = os.statvfs("/")
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bavail * st.f_frsize
+        used = max(0, total - free)
+        percent = round(used * 100 / total, 1) if total else 0
+        return total, used, percent
     except Exception:
-        return 0
+        return 0, 0, 0
 
 def cpu_percent():
-    # 读取两次 /proc/stat 计算 CPU 使用率
     def read():
-        parts = open("/proc/stat").readline().split()[1:]
-        vals = list(map(int, parts))
+        vals = list(map(int, open("/proc/stat").readline().split()[1:]))
         idle = vals[3] + vals[4]
         total = sum(vals)
         return idle, total
@@ -147,6 +157,8 @@ def tg_send(text):
 def collect():
     up = uptime_seconds()
     rx, tx = net_bytes()
+    mem_total, mem_used, mem_percent = mem_info()
+    disk_total, disk_used, disk_percent = disk_info()
     return {
         "secret": SECRET,
         "server_id": SID,
@@ -155,21 +167,26 @@ def collect():
         "public_ip": public_ip(),
         "uptime_seconds": up,
         "boot_time": boot_time_text(up),
+        "cpu_cores": cpu_cores(),
         "cpu_percent": cpu_percent(),
-        "mem_percent": mem_percent(),
-        "disk_percent": disk_percent(),
+        "mem_total": mem_total,
+        "mem_used": mem_used,
+        "mem_percent": mem_percent,
+        "disk_total": disk_total,
+        "disk_used": disk_used,
+        "disk_percent": disk_percent,
         "rx_bytes": rx,
         "tx_bytes": tx,
         "ts": int(time.time()),
     }
 
 def main():
-    tg_send(f"✅📡 <b>探针已启动</b>\n\n🖥️ {NAME}\n🆔 ID：{SID}\n🌐 上报地址：<code>{URL}</code>")
+    tg_send(f"✅📡 <b>探针已启动</b>\n\n🖥️ {NAME}\n🆔 ID：{SID}\n⚙️ 已启用配置上报：CPU核心 / 内存总量 / 硬盘总量\n🌐 上报地址：<code>{URL}</code>")
     while True:
         try:
             data = collect()
             post_json(URL, data)
-            print("report ok", time.strftime("%F %T"), data.get("uptime_seconds"), flush=True)
+            print("report ok", time.strftime("%F %T"), "cores", data.get("cpu_cores"), "mem", data.get("mem_total"), "disk", data.get("disk_total"), flush=True)
         except Exception as e:
             print("report failed", e, flush=True)
         time.sleep(INTERVAL)
