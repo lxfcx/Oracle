@@ -3316,6 +3316,473 @@ def poll():
 
 
 
+
+
+# ============================================================
+# FINAL EDIT BUTTON FLOW PATCH
+# 只新增/覆盖按钮编辑流程，不改监控、提醒、探针等原有逻辑。
+# ============================================================
+
+EDIT_PENDING_SQL = """
+CREATE TABLE IF NOT EXISTS pending_actions (
+    chat_id TEXT PRIMARY KEY,
+    target_type TEXT DEFAULT '',
+    target_id TEXT DEFAULT '',
+    field TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
+def ensure_pending_table():
+    conn = db()
+    conn.execute(EDIT_PENDING_SQL)
+    conn.commit()
+    conn.close()
+
+
+def set_pending_action(chat_id, target_type, target_id, field):
+    ensure_pending_table()
+    conn = db()
+    conn.execute(
+        "INSERT OR REPLACE INTO pending_actions(chat_id,target_type,target_id,field,created_at) VALUES(?,?,?,?,?)",
+        (str(chat_id), str(target_type), str(target_id), str(field), now_text())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_pending_action(chat_id):
+    ensure_pending_table()
+    conn = db()
+    row = conn.execute("SELECT * FROM pending_actions WHERE chat_id=?", (str(chat_id),)).fetchone()
+    conn.close()
+    return row
+
+
+def clear_pending_action(chat_id):
+    ensure_pending_table()
+    conn = db()
+    conn.execute("DELETE FROM pending_actions WHERE chat_id=?", (str(chat_id),))
+    conn.commit()
+    conn.close()
+
+
+def field_cn(field):
+    return {
+        "price": "付费价格",
+        "expire_at": "到期时间",
+        "cycle": "付费周期",
+        "note": "备注",
+        "check_port": "检测端口",
+        "os_name": "系统",
+        "name": "名称",
+        "free_forever": "永久免费",
+        "auto_renew": "自动续费",
+    }.get(field, field)
+
+
+def field_example(field):
+    return {
+        "price": "50 CNY  或  6 USD",
+        "expire_at": "2027-05-01",
+        "cycle": "月付 / 季付 / 年付",
+        "note": "香港甲骨文主力机",
+        "check_port": "22  或  443",
+        "os_name": "Ubuntu 22.04",
+        "name": "HK-Oracle",
+        "free_forever": "是 / 否",
+        "auto_renew": "是 / 否",
+    }.get(field, "请输入新内容")
+
+
+def edit_prompt_text(target_type, target_id, field):
+    title = "🏠 本机" if target_type == "local" else f"🖥️ 服务器 ID {target_id}"
+    return (
+        f"✏️✨ <b>编辑{title}：{h(field_cn(field))}</b> ✨✏️\n\n"
+        f"请直接发送新的 <b>{h(field_cn(field))}</b>。\n\n"
+        f"📌 示例：\n<code>{h(field_example(field))}</code>\n\n"
+        "发送后会自动保存并返回详情页。\n"
+        "取消编辑请发送：<code>取消</code>"
+    )
+
+
+def edit_nav_keyboard(target_type="server", target_id="0"):
+    if target_type == "local":
+        return [[{"text": "⬅️ 上一步：本机详情", "callback_data": "target:local"}]] + bottom_nav()
+    return [[{"text": "⬅️ 上一步：服务器详情", "callback_data": f"target:server:{target_id}"}]] + bottom_nav()
+
+
+def edit_server_field_keyboard(sid):
+    return [
+        [
+            {"text": "💰 编辑价格", "callback_data": f"field:server:{sid}:price"},
+            {"text": "📆 编辑到期", "callback_data": f"field:server:{sid}:expire_at"},
+        ],
+        [
+            {"text": "🔁 编辑周期", "callback_data": f"field:server:{sid}:cycle"},
+            {"text": "📝 编辑备注", "callback_data": f"field:server:{sid}:note"},
+        ],
+        [
+            {"text": "🔌 编辑端口", "callback_data": f"field:server:{sid}:check_port"},
+            {"text": "🧬 编辑系统", "callback_data": f"field:server:{sid}:os_name"},
+        ],
+        [
+            {"text": "🏷️ 编辑名称", "callback_data": f"field:server:{sid}:name"},
+        ],
+        [
+            {"text": "🎁 永久免费", "callback_data": f"field:server:{sid}:free_forever"},
+            {"text": "🔁 自动续费", "callback_data": f"field:server:{sid}:auto_renew"},
+        ],
+        [{"text": "⬅️ 上一步：服务器详情", "callback_data": f"target:server:{sid}"}],
+        [
+            {"text": "📋 返回列表", "callback_data": "nav:servers"},
+            {"text": "📊 返回总览", "callback_data": "nav:dashboard"},
+            {"text": "🛠️ 工具", "callback_data": "nav:tools"},
+        ],
+    ]
+
+
+def edit_local_field_keyboard():
+    return [
+        [
+            {"text": "💰 编辑价格", "callback_data": "field:local:0:price"},
+            {"text": "📆 编辑到期", "callback_data": "field:local:0:expire_at"},
+        ],
+        [
+            {"text": "🔁 编辑周期", "callback_data": "field:local:0:cycle"},
+            {"text": "📝 编辑备注", "callback_data": "field:local:0:note"},
+        ],
+        [
+            {"text": "🏷️ 编辑名称", "callback_data": "field:local:0:name"},
+        ],
+        [{"text": "⬅️ 上一步：本机详情", "callback_data": "target:local"}],
+        [
+            {"text": "📋 返回列表", "callback_data": "nav:servers"},
+            {"text": "📊 返回总览", "callback_data": "nav:dashboard"},
+            {"text": "🛠️ 工具", "callback_data": "nav:tools"},
+        ],
+    ]
+
+
+# 覆盖底部导航，所有下一步页面都带上一步、返回列表、返回总览、工具。
+def bottom_nav(extra=None):
+    rows = []
+    if extra:
+        rows.extend(extra)
+    rows.append([
+        {"text": "⬅️ 上一步：服务器列表", "callback_data": "nav:servers"},
+        {"text": "📋 返回列表", "callback_data": "nav:servers"},
+    ])
+    rows.append([
+        {"text": "📊 返回总览", "callback_data": "nav:dashboard"},
+        {"text": "🛠️ 工具", "callback_data": "nav:tools"},
+    ])
+    return rows
+
+
+# 覆盖服务器详情按钮，加入字段级编辑入口。
+def remote_detail_keyboard(sid):
+    return bottom_nav([
+        [
+            {"text": "🌐 流量", "callback_data": f"view:traffic:server:{sid}"},
+            {"text": "💾 磁盘", "callback_data": f"view:disk:server:{sid}"},
+            {"text": "🧾 事件", "callback_data": f"view:events:server:{sid}"},
+        ],
+        [
+            {"text": "✏️ 编辑资料", "callback_data": f"edit:server:{sid}"},
+            {"text": "⏰ 续费", "callback_data": f"server_renew_help:{sid}"},
+            {"text": "📡 探针", "callback_data": f"agent_cmd:{sid}"},
+        ],
+        [
+            {"text": "💰 价格", "callback_data": f"field:server:{sid}:price"},
+            {"text": "📆 到期", "callback_data": f"field:server:{sid}:expire_at"},
+            {"text": "🔁 周期", "callback_data": f"field:server:{sid}:cycle"},
+        ],
+        [
+            {"text": "📝 备注", "callback_data": f"field:server:{sid}:note"},
+            {"text": "🔌 端口", "callback_data": f"field:server:{sid}:check_port"},
+            {"text": "🧬 系统", "callback_data": f"field:server:{sid}:os_name"},
+        ],
+        [
+            {"text": "🏷️ 名称", "callback_data": f"field:server:{sid}:name"},
+            {"text": "🎁 永久免费", "callback_data": f"field:server:{sid}:free_forever"},
+            {"text": "🔁 自动续费", "callback_data": f"field:server:{sid}:auto_renew"},
+        ],
+        [
+            {"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"},
+            {"text": "🗑️ 删除", "callback_data": f"delete_confirm:{sid}"},
+        ],
+        [
+            {"text": "📆 +1月", "callback_data": f"renew_month:{sid}"},
+            {"text": "🗓️ +3月", "callback_data": f"renew_quarter:{sid}"},
+            {"text": "📅 +1年", "callback_data": f"renew_year:{sid}"},
+        ],
+    ])
+
+
+# 覆盖本机详情按钮，加入字段级编辑入口。
+def local_detail_keyboard():
+    return bottom_nav([
+        [
+            {"text": "🌐 本机流量", "callback_data": "view:traffic:local"},
+            {"text": "💾 本机磁盘", "callback_data": "view:disk:local"},
+        ],
+        [
+            {"text": "🧾 本机事件", "callback_data": "view:events:local"},
+            {"text": "✏️ 编辑本机", "callback_data": "edit:local"},
+        ],
+        [
+            {"text": "💰 价格", "callback_data": "field:local:0:price"},
+            {"text": "📆 到期", "callback_data": "field:local:0:expire_at"},
+            {"text": "🔁 周期", "callback_data": "field:local:0:cycle"},
+        ],
+        [
+            {"text": "📝 备注", "callback_data": "field:local:0:note"},
+            {"text": "🏷️ 名称", "callback_data": "field:local:0:name"},
+        ],
+        [{"text": "🌍 刷新本机地区", "callback_data": "local:refresh_meta"}],
+    ])
+
+
+def update_server_field(sid, field, value):
+    value = one_line(value)
+    conn = db()
+    row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("没有找到这个服务器 ID")
+
+    if field == "price":
+        parts = value.split()
+        if not parts:
+            raise ValueError("价格不能为空，例如：50 CNY")
+        price = float(parts[0])
+        currency = row["currency"]
+        if len(parts) >= 2:
+            currency = normalize_currency(parts[1])
+            if currency not in ["CNY", "USD", "EUR", "GBP"]:
+                raise ValueError("币种只支持 CNY / USD / EUR / GBP")
+        conn.execute("UPDATE servers SET price=?, currency=?, free_forever=0 WHERE id=?", (price, currency, sid))
+
+    elif field == "expire_at":
+        parse_date(value)
+        conn.execute("UPDATE servers SET expire_at=?, free_forever=0 WHERE id=?", (value, sid))
+        conn.execute("DELETE FROM reminders WHERE server_id=?", (sid,))
+
+    elif field == "cycle":
+        cycle = normalize_cycle(value)
+        if cycle not in ["monthly", "quarterly", "yearly"]:
+            raise ValueError("周期只支持：月付 / 季付 / 年付")
+        conn.execute("UPDATE servers SET cycle=? WHERE id=?", (cycle, sid))
+
+    elif field == "note":
+        conn.execute("UPDATE servers SET note=? WHERE id=?", (value, sid))
+
+    elif field == "check_port":
+        port = int(value)
+        if port < 1 or port > 65535:
+            raise ValueError("端口必须是 1-65535")
+        conn.execute("UPDATE servers SET check_port=? WHERE id=?", (port, sid))
+
+    elif field == "os_name":
+        conn.execute("UPDATE servers SET os_name=? WHERE id=?", (value, sid))
+
+    elif field == "name":
+        if not value:
+            raise ValueError("名称不能为空")
+        conn.execute("UPDATE servers SET name=? WHERE id=?", (value, sid))
+
+    elif field == "free_forever":
+        enabled = 1 if truthy(value) else 0
+        if enabled:
+            conn.execute("UPDATE servers SET free_forever=1, auto_renew=0, price=0, currency='USD', expire_at='永久' WHERE id=?", (sid,))
+            conn.execute("DELETE FROM reminders WHERE server_id=?", (sid,))
+        else:
+            conn.execute("UPDATE servers SET free_forever=0, expire_at='' WHERE id=?", (sid,))
+
+    elif field == "auto_renew":
+        enabled = 1 if truthy(value) else 0
+        conn.execute("UPDATE servers SET auto_renew=? WHERE id=?", (enabled, sid))
+
+    else:
+        conn.close()
+        raise ValueError("不支持的编辑字段")
+
+    conn.commit()
+    new_row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    conn.close()
+    event_add("action", "编辑服务器", f"服务器 ID {sid} 已更新 {field_cn(field)}")
+    return new_row
+
+
+def update_local_field(field, value):
+    value = one_line(value)
+    if field == "price":
+        parts = value.split()
+        if not parts:
+            raise ValueError("价格不能为空，例如：50 CNY")
+        float(parts[0])
+        set_local_profile_value("price", parts[0])
+        if len(parts) >= 2:
+            currency = normalize_currency(parts[1])
+            if currency not in ["CNY", "USD", "EUR", "GBP"]:
+                raise ValueError("币种只支持 CNY / USD / EUR / GBP")
+            set_local_profile_value("currency", currency)
+
+    elif field == "expire_at":
+        parse_date(value)
+        set_local_profile_value("expire_at", value)
+
+    elif field == "cycle":
+        cycle = normalize_cycle(value)
+        if cycle not in ["monthly", "quarterly", "yearly"]:
+            raise ValueError("周期只支持：月付 / 季付 / 年付")
+        set_local_profile_value("cycle", cycle)
+
+    elif field == "note":
+        set_local_profile_value("note", value)
+
+    elif field == "name":
+        if not value:
+            raise ValueError("名称不能为空")
+        set_local_profile_value("name", value)
+
+    else:
+        raise ValueError("本机不支持这个字段")
+
+    event_add("action", "编辑本机", f"已更新本机 {field_cn(field)}")
+
+
+def process_pending_input(chat_id, text):
+    if clean_command_text(text) in ["取消", "取消编辑", "退出编辑"]:
+        clear_pending_action(chat_id)
+        send_inline(chat_id, "✅ 已取消编辑。", bottom_nav())
+        return True
+
+    row = get_pending_action(chat_id)
+    if not row:
+        return False
+
+    target_type = row["target_type"]
+    target_id = row["target_id"]
+    field = row["field"]
+
+    try:
+        if target_type == "local":
+            update_local_field(field, text)
+            clear_pending_action(chat_id)
+            send_inline(
+                chat_id,
+                f"✅🏠 <b>本机 {h(field_cn(field))} 已更新</b>\n\n{local_detail_text()}",
+                local_detail_keyboard()
+            )
+            return True
+
+        if target_type == "server":
+            new_row = update_server_field(target_id, field, text)
+            clear_pending_action(chat_id)
+            send_inline(
+                chat_id,
+                f"✅🖥️ <b>服务器 {h(field_cn(field))} 已更新</b>\n\n{remote_detail_text(new_row)}",
+                remote_detail_keyboard(target_id)
+            )
+            return True
+
+    except Exception as e:
+        send_inline(
+            chat_id,
+            f"❌ <b>编辑失败：</b>{h(e)}\n\n请重新发送正确内容，或发送 <code>取消</code> 退出编辑。\n\n示例：<code>{h(field_example(field))}</code>",
+            edit_nav_keyboard(target_type, target_id)
+        )
+        return True
+
+    return False
+
+
+_prev_handle_callback_edit_buttons = handle_callback
+
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if not is_admin(chat_id):
+            answer_callback(callback_id, "未授权")
+            return
+
+        if data == "edit:local":
+            answer_callback(callback_id, "编辑本机")
+            edit_inline_message(
+                chat_id,
+                message_id,
+                "🏠✏️ <b>编辑本机资料</b>\n\n请选择要编辑的字段。",
+                edit_local_field_keyboard()
+            )
+            return
+
+        if data.startswith("edit:server:"):
+            sid = data.split(":")[2]
+            answer_callback(callback_id, "编辑服务器")
+            edit_inline_message(
+                chat_id,
+                message_id,
+                f"🖥️✏️ <b>编辑服务器 ID {h(sid)}</b>\n\n请选择要编辑的字段。",
+                edit_server_field_keyboard(sid)
+            )
+            return
+
+        # 兼容旧按钮：server_edit:ID
+        if data.startswith("server_edit:"):
+            sid = data.split(":", 1)[1]
+            answer_callback(callback_id, "编辑服务器")
+            edit_inline_message(
+                chat_id,
+                message_id,
+                f"🖥️✏️ <b>编辑服务器 ID {h(sid)}</b>\n\n请选择要编辑的字段。",
+                edit_server_field_keyboard(sid)
+            )
+            return
+
+        if data.startswith("field:"):
+            parts = data.split(":")
+            if len(parts) < 4:
+                answer_callback(callback_id, "按钮格式错误")
+                return
+            target_type, target_id, field = parts[1], parts[2], parts[3]
+            answer_callback(callback_id, f"请输入{field_cn(field)}")
+            set_pending_action(chat_id, target_type, target_id, field)
+            edit_inline_message(
+                chat_id,
+                message_id,
+                edit_prompt_text(target_type, target_id, field),
+                edit_nav_keyboard(target_type, target_id)
+            )
+            return
+
+    except Exception as e:
+        try:
+            answer_callback(callback.get("id"), "操作失败")
+            send(callback.get("message", {}).get("chat", {}).get("id"), f"❌ 按钮操作失败：{h(e)}", keyboard=False)
+        except Exception:
+            pass
+        return
+
+    return _prev_handle_callback_edit_buttons(callback)
+
+
+_prev_handle_edit_buttons = handle
+
+def handle(chat_id, text):
+    if process_pending_input(chat_id, text):
+        return
+    return _prev_handle_edit_buttons(chat_id, text)
+
+
+
 if __name__ == "__main__":
     init_db()
     poll()
