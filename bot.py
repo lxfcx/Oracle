@@ -5568,6 +5568,701 @@ def init_db():
     reset_server_id_sequence()
 
 
+
+
+# ============================================================
+# FINAL PATCH: 探针静默上报，不再 TG 推送“探针已启动”
+# 说明：
+# 1) 探针只负责 HTTP 上报数据，不负责 Telegram 推送；
+# 2) 服务器离线/恢复在线只由主机器人 monitor_server_online_status 统一推送；
+# 3) 重新生成的一键部署命令不再携带 BOT_TOKEN / CHAT_ID；
+# 4) 兼容旧 agent.sh 参数，但新版 agent.sh 会忽略 token/chat。
+# ============================================================
+
+def agent_install_command(server_name="server", sid=None):
+    safe_name = str(server_name or "server").replace('"', '').replace("'", "")
+    sid_arg = str(sid or "0")
+    return (
+        "wget -qO- https://raw.githubusercontent.com/lxfcx/Oracle/main/agent.sh | "
+        f"bash -s -- --url \"{metrics_url_for_agent()}\" --secret \"{metrics_secret()}\" "
+        f"--sid \"{sid_arg}\" --name \"{safe_name}\""
+    )
+
+
+def cmd_agent_command(chat_id, sid=None):
+    server_name = "server"
+    title = "📡✨ <b>一键部署探针命令</b> ✨📡"
+    real_sid = None
+    if sid:
+        r = get_server_row(sid)
+        if r:
+            real_sid = r["id"]
+            server_name = r["name"]
+            title = f"📡✨ <b>{h(server_name)} 一键部署探针</b> ✨📡"
+
+    cmd = agent_install_command(server_name, real_sid)
+
+    send_inline(chat_id, (
+        f"{title}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "📌 <b>用途：</b>复制下面命令到对应服务器 SSH 执行。\n"
+        "📌 <b>新版逻辑：</b>探针只静默上报数据，不再给 TG 推送“探针已启动”。\n"
+        "📌 <b>状态推送：</b>离线 / 恢复在线只由主机器人统一推送，避免重复和乱推送。\n"
+        "📌 <b>上报内容：</b>真实 uptime、开机时间、CPU、内存、硬盘、流量、配置数据。\n"
+        "📌 <b>重要：</b>主控服务器需要放行 TCP 端口 "
+        f"<code>{metrics_port()}</code>，否则探针无法上报。\n"
+        "📌 <b>测试：</b>部署后等待 1 分钟，再打开服务器详情查看探针数据。\n"
+        "━━━━━━━━━━━━━━\n\n"
+        f"<code>{h(cmd)}</code>"
+    ), [[
+        {"text": "⬅️ 返回服务器列表", "callback_data": "nav:servers"},
+        {"text": "📊 返回总览", "callback_data": "nav:dashboard"}
+    ]])
+
+
+# 覆盖本机探针说明，避免误以为本机探针也会发送启动推送。
+def cmd_local_agent_command(chat_id):
+    send_inline(chat_id, (
+        "📡✨ <b>本机一键部署探针</b> ✨📡\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "🏠 <b>说明：</b>本机就是主控服务器，机器人已经直接读取本机 CPU、内存、磁盘、流量、运行时间。\n\n"
+        "✅ 本机通常 <b>不需要额外安装探针</b>。\n"
+        "✅ 远程服务器探针新版为 <b>静默上报</b>，不会再推送“探针已启动”。\n"
+        "✅ 离线 / 恢复在线通知只由主机器人统一推送。\n\n"
+        "如果你想把本机也当成远程服务器一样测试探针，请先把本机公网 IP 添加为一台服务器，然后进入那台服务器详情点击 <b>📡 探针</b>。\n"
+        "━━━━━━━━━━━━━━"
+    ), bottom_nav([[{"text": "🏠 返回本机详情", "callback_data": "target:local"}]]))
+
+
+# 最后一层 callback：确保 agent_cmd:local 进入静默说明。
+_prev_handle_callback_silent_agent_patch = handle_callback
+
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+
+        if data == "agent_cmd:local":
+            if not is_admin(chat_id):
+                answer_callback(callback_id, "未授权")
+                return
+            answer_callback(callback_id, "本机探针说明")
+            cmd_local_agent_command(chat_id)
+            return
+    except Exception:
+        pass
+
+    return _prev_handle_callback_silent_agent_patch(callback)
+
+
+
+
+# ============================================================
+# FINAL EXTREME PATCH: 秒回 + 精准 300 秒离线/恢复 + CPU/内存/硬盘阈值告警
+# 说明：
+# - 原来 CHECK_INTERVAL=60 且 poll 先跑监控再 getUpdates，会导致命令回复卡顿、离线恢复延迟超过 300 秒。
+# - 这里改为：先处理 TG 消息；后台监控每 10 秒检查；离线宽限按 first_fail_at 精准计算。
+# - 每台服务器支持单独编辑 CPU/内存/硬盘告警百分比；探针上报后自动触发状态事件和 TG 推送。
+# ============================================================
+
+FAST_ONLINE_CHECK_INTERVAL = int(os.getenv("ONLINE_CHECK_INTERVAL", "10"))
+FAST_METRIC_CHECK_INTERVAL = int(os.getenv("METRIC_CHECK_INTERVAL", "20"))
+FAST_EXPIRY_CHECK_INTERVAL = int(os.getenv("EXPIRY_CHECK_INTERVAL", "300"))
+OFFLINE_GRACE_SECONDS = int(os.getenv("OFFLINE_GRACE_SECONDS", str(globals().get("OFFLINE_GRACE_SECONDS", 300))))
+RECOVERY_STABLE_SECONDS = int(os.getenv("RECOVERY_STABLE_SECONDS", "20"))
+METRIC_ALERT_COOLDOWN_SECONDS = int(os.getenv("METRIC_ALERT_COOLDOWN_SECONDS", "600"))
+
+
+def ensure_alert_threshold_columns():
+    conn = db()
+    for col, definition in [
+        ("cpu_alert", "REAL DEFAULT 90"),
+        ("mem_alert", "REAL DEFAULT 90"),
+        ("disk_alert", "REAL DEFAULT 90"),
+    ]:
+        ensure_column(conn, "servers", col, definition)
+
+    # 状态表补全精准计时字段。
+    for col, definition in [
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("success_count", "INTEGER DEFAULT 0"),
+        ("notified_offline", "INTEGER DEFAULT 0"),
+        ("first_fail_at", "TEXT DEFAULT ''"),
+        ("first_recover_at", "TEXT DEFAULT ''"),
+        ("online_since", "TEXT DEFAULT ''"),
+        ("offline_since", "TEXT DEFAULT ''"),
+    ]:
+        ensure_column(conn, "server_status", col, definition)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS metric_alert_state (
+        server_id INTEGER,
+        metric TEXT,
+        active INTEGER DEFAULT 0,
+        last_value REAL DEFAULT 0,
+        threshold REAL DEFAULT 0,
+        last_sent_at TEXT DEFAULT '',
+        PRIMARY KEY(server_id, metric)
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def parse_percent_value(value):
+    value = one_line(value, "").replace("%", "").strip()
+    if not value:
+        raise ValueError("百分比不能为空")
+    v = float(value)
+    if v < 1 or v > 100:
+        raise ValueError("百分比必须在 1-100 之间")
+    return v
+
+
+def threshold_value(r, field, default=90):
+    try:
+        if field in r.keys() and r[field] not in [None, ""]:
+            return float(r[field])
+    except Exception:
+        pass
+    return float(default)
+
+
+def metric_cn(metric):
+    return {"cpu": "CPU", "mem": "内存", "disk": "硬盘"}.get(metric, metric)
+
+
+def metric_emoji(metric):
+    return {"cpu": "🔥", "mem": "🧠", "disk": "💾"}.get(metric, "🚨")
+
+
+def metric_value_from_row(m, metric):
+    if not m:
+        return 0.0
+    try:
+        if metric == "cpu":
+            return float(m["cpu_percent"] or 0)
+        if metric == "mem":
+            return float(m["mem_percent"] or 0)
+        if metric == "disk":
+            return float(m["disk_percent"] or 0)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def metric_alert_text(r, metric, value, threshold, recovered=False):
+    em = metric_emoji(metric)
+    name = metric_cn(metric)
+    title = f"✅{em} <b>{name} 告警恢复</b> {em}✅" if recovered else f"🚨{em} <b>{name} 使用率告警</b> {em}🚨"
+    status = "✅ 已恢复正常" if recovered else "🚨 已超过阈值"
+    m = get_agent_metrics(r["id"]) if "get_agent_metrics" in globals() else None
+
+    extra = ""
+    if m:
+        extra = (
+            f"\n🧩 <b>CPU 核心：</b>{h(m['cpu_cores'] if 'cpu_cores' in m.keys() else '未知')}\n"
+            f"🧠 <b>内存：</b>{fmt_size(m['mem_used']) if 'mem_used' in m.keys() else '未知'} / {fmt_size(m['mem_total']) if 'mem_total' in m.keys() else '未知'}\n"
+            f"💾 <b>硬盘：</b>{fmt_size(m['disk_used']) if 'disk_used' in m.keys() else '未知'} / {fmt_size(m['disk_total']) if 'disk_total' in m.keys() else '未知'}"
+        )
+
+    return (
+        f"{title}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🖥️ <b>服务器：</b>{h(r['name'])}\n"
+        f"🆔 <b>ID：</b><code>{r['id']}</code>\n"
+        f"🌐 <b>主机：</b><code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📍 <b>地区：</b>{server_location_line(r)}\n"
+        f"{em} <b>项目：</b>{name}\n"
+        f"📊 <b>当前使用率：</b>{value:.0f}%\n"
+        f"🎯 <b>告警阈值：</b>{threshold:.0f}%\n"
+        f"📌 <b>状态：</b>{status}"
+        f"{extra}\n"
+        f"⏰ <b>时间：</b>{now_text()}\n"
+        "━━━━━━━━━━━━━━"
+    )
+
+
+def metric_alert_state_get(conn, sid, metric):
+    return conn.execute(
+        "SELECT * FROM metric_alert_state WHERE server_id=? AND metric=?",
+        (sid, metric)
+    ).fetchone()
+
+
+def metric_alert_state_set(conn, sid, metric, active, value, threshold):
+    conn.execute(
+        "INSERT OR REPLACE INTO metric_alert_state(server_id, metric, active, last_value, threshold, last_sent_at) VALUES(?,?,?,?,?,?)",
+        (sid, metric, 1 if active else 0, float(value), float(threshold), now_text())
+    )
+
+
+def can_resend_metric_alert(state):
+    if not state:
+        return True
+    try:
+        last = state["last_sent_at"] or ""
+        if not last:
+            return True
+        return (datetime.now() - parse_date(last)).total_seconds() >= METRIC_ALERT_COOLDOWN_SECONDS
+    except Exception:
+        return True
+
+
+def monitor_metric_alerts():
+    ensure_alert_threshold_columns()
+    if "get_agent_metrics" not in globals():
+        return
+
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+    for r in rows:
+        m = get_agent_metrics(r["id"])
+        if not m:
+            continue
+
+        for metric, col in [("cpu", "cpu_alert"), ("mem", "mem_alert"), ("disk", "disk_alert")]:
+            threshold = threshold_value(r, col, 90)
+            if threshold <= 0:
+                continue
+
+            value = metric_value_from_row(m, metric)
+            state = metric_alert_state_get(conn, r["id"], metric)
+            active = bool(state and int(state["active"] or 0) == 1)
+
+            # 触发告警：超过阈值，且之前未激活或冷却时间已过。
+            if value >= threshold:
+                if (not active) or can_resend_metric_alert(state):
+                    metric_alert_state_set(conn, r["id"], metric, True, value, threshold)
+                    conn.commit()
+                    title = f"{metric_emoji(metric)} {r['name']} {metric_cn(metric)} 超过 {threshold:.0f}%"
+                    content = metric_alert_text(r, metric, value, threshold, recovered=False)
+                    event_add("system", title, f"{metric_cn(metric)} 当前 {value:.0f}% / 阈值 {threshold:.0f}%")
+                    broadcast(content)
+                continue
+
+            # 恢复通知：之前处于告警状态，现在低于阈值 - 3，避免抖动。
+            if active and value <= max(0, threshold - 3):
+                metric_alert_state_set(conn, r["id"], metric, False, value, threshold)
+                conn.commit()
+                title = f"✅ {r['name']} {metric_cn(metric)} 告警恢复"
+                content = metric_alert_text(r, metric, value, threshold, recovered=True)
+                event_add("system", title, f"{metric_cn(metric)} 当前 {value:.0f}% / 阈值 {threshold:.0f}%")
+                broadcast(content)
+
+    conn.close()
+
+
+def offline_elapsed_text(seconds):
+    try:
+        seconds = int(max(0, seconds))
+    except Exception:
+        seconds = 0
+    return duration_from_seconds(seconds) if "duration_from_seconds" in globals() else f"{seconds} 秒"
+
+
+# 覆盖离线/恢复监控：每 10 秒跑一次，宽限期从第一次失败开始精确计算。
+def monitor_server_online_status():
+    ensure_alert_threshold_columns()
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+    now_dt = datetime.now()
+    now = now_text()
+
+    for r in rows:
+        sid = r["id"]
+        raw_online = check_tcp(r["host"], r["check_port"], timeout=3)
+        old = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+
+        if not old:
+            status = "online" if raw_online else "unknown"
+            conn.execute(
+                "INSERT OR REPLACE INTO server_status(server_id,last_status,last_checked_at,last_changed_at,fail_count,success_count,notified_offline,first_fail_at,first_recover_at,online_since,offline_since) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (sid, status, now, now, 0 if raw_online else 1, 1 if raw_online else 0, 0, "" if raw_online else now, "", now if raw_online else "", "")
+            )
+            conn.commit()
+            continue
+
+        old_status = old["last_status"] or "unknown"
+        notified = int(old["notified_offline"] or 0)
+        first_fail_at = old["first_fail_at"] or ""
+        first_recover_at = old["first_recover_at"] or ""
+
+        def elapsed_from(v):
+            try:
+                return (now_dt - parse_date(v)).total_seconds() if v else 0
+            except Exception:
+                return 0
+
+        fail_elapsed = elapsed_from(first_fail_at)
+        recover_elapsed = elapsed_from(first_recover_at)
+
+        if raw_online:
+            if old_status == "offline" and notified == 1:
+                # 离线后恢复：先记录恢复开始，稳定 RECOVERY_STABLE_SECONDS 后只推一次。
+                if not first_recover_at:
+                    conn.execute(
+                        "UPDATE server_status SET first_recover_at=?, last_checked_at=?, success_count=1 WHERE server_id=?",
+                        (now, now, sid)
+                    )
+                    conn.commit()
+                elif recover_elapsed >= RECOVERY_STABLE_SECONDS:
+                    conn.execute(
+                        "UPDATE server_status SET last_status='online', last_checked_at=?, last_changed_at=?, fail_count=0, success_count=success_count+1, notified_offline=0, first_fail_at='', first_recover_at='', online_since=?, offline_since='' WHERE server_id=?",
+                        (now, now, now, sid)
+                    )
+                    conn.commit()
+                    push_event("online", f"服务器恢复在线：{r['name']}", online_push_text(r))
+                else:
+                    conn.execute(
+                        "UPDATE server_status SET last_checked_at=?, success_count=success_count+1 WHERE server_id=?",
+                        (now, sid)
+                    )
+                    conn.commit()
+            else:
+                online_since = old["online_since"] if "online_since" in old.keys() and old["online_since"] else (old["last_changed_at"] or now)
+                if old_status != "online":
+                    online_since = now
+                conn.execute(
+                    "UPDATE server_status SET last_status='online', last_checked_at=?, fail_count=0, success_count=success_count+1, first_fail_at='', first_recover_at='', online_since=?, offline_since='' WHERE server_id=?",
+                    (now, online_since, sid)
+                )
+                conn.commit()
+            continue
+
+        # raw offline
+        if old_status != "offline":
+            if not first_fail_at:
+                conn.execute(
+                    "UPDATE server_status SET first_fail_at=?, last_checked_at=?, fail_count=1, success_count=0, first_recover_at='' WHERE server_id=?",
+                    (now, now, sid)
+                )
+                conn.commit()
+            elif fail_elapsed >= OFFLINE_GRACE_SECONDS:
+                conn.execute(
+                    "UPDATE server_status SET last_status='offline', last_checked_at=?, last_changed_at=?, fail_count=fail_count+1, success_count=0, notified_offline=1, first_recover_at='', offline_since=?, online_since='' WHERE server_id=?",
+                    (now, now, now, sid)
+                )
+                conn.commit()
+                push_event("offline", f"服务器离线：{r['name']}", offline_push_text(r))
+            else:
+                conn.execute(
+                    "UPDATE server_status SET last_checked_at=?, fail_count=fail_count+1, success_count=0 WHERE server_id=?",
+                    (now, sid)
+                )
+                conn.commit()
+        else:
+            offline_since = old["offline_since"] if "offline_since" in old.keys() and old["offline_since"] else (old["last_changed_at"] or now)
+            conn.execute(
+                "UPDATE server_status SET last_checked_at=?, fail_count=fail_count+1, success_count=0, first_recover_at='', offline_since=?, online_since='' WHERE server_id=?",
+                (now, offline_since, sid)
+            )
+            conn.commit()
+
+    conn.close()
+
+
+# 覆盖字段显示：加入 CPU/内存/硬盘告警阈值。
+def field_cn(field):
+    return {
+        "host": "IP / 主机",
+        "ip": "IP / 主机",
+        "cpu_alert": "CPU 告警阈值",
+        "mem_alert": "内存告警阈值",
+        "disk_alert": "硬盘告警阈值",
+        "price": "付费价格",
+        "expire_at": "到期时间",
+        "cycle": "付费周期",
+        "note": "备注",
+        "check_port": "检测端口",
+        "os_name": "系统",
+        "name": "名称",
+        "opened_at": "开通时间",
+        "free_forever": "永久免费",
+        "auto_renew": "自动续费",
+    }.get(field, field)
+
+
+def field_example(field):
+    return {
+        "host": "1.2.3.4  或  example.com",
+        "ip": "1.2.3.4  或  example.com",
+        "cpu_alert": "90",
+        "mem_alert": "85",
+        "disk_alert": "80",
+        "price": "50 CNY  或  6 USD",
+        "expire_at": "2027-05-01",
+        "opened_at": "2026-05-01 10:00:00  或  2026-05-01",
+        "cycle": "月付 / 季付 / 年付",
+        "note": "香港甲骨文主力机",
+        "check_port": "22  或  443",
+        "os_name": "Ubuntu 22.04",
+        "name": "HK-Oracle",
+        "free_forever": "是 / 否",
+        "auto_renew": "是 / 否",
+    }.get(field, "请输入新内容")
+
+
+# 包装服务器字段更新：加入阈值字段。
+_prev_update_server_field_threshold_patch = update_server_field
+
+def update_server_field(sid, field, value):
+    if field in ["cpu_alert", "mem_alert", "disk_alert"]:
+        ensure_alert_threshold_columns()
+        v = parse_percent_value(value)
+        conn = db()
+        row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+        if not row:
+            conn.close()
+            raise ValueError("没有找到这个服务器 ID")
+        conn.execute(f"UPDATE servers SET {field}=? WHERE id=?", (v, sid))
+        # 改阈值后清理该项旧告警状态，避免改完立刻卡在旧状态。
+        metric = {"cpu_alert": "cpu", "mem_alert": "mem", "disk_alert": "disk"}[field]
+        conn.execute("DELETE FROM metric_alert_state WHERE server_id=? AND metric=?", (sid, metric))
+        conn.commit()
+        new_row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+        conn.close()
+        event_add("action", "编辑服务器告警阈值", f"服务器 ID {sid} 已更新 {field_cn(field)} 为 {v:g}%")
+        return new_row
+    return _prev_update_server_field_threshold_patch(sid, field, value)
+
+
+def alert_threshold_line(r):
+    return (
+        f"🎯 告警阈值：🔥CPU {threshold_value(r, 'cpu_alert'):.0f}% ｜ "
+        f"🧠内存 {threshold_value(r, 'mem_alert'):.0f}% ｜ "
+        f"💾硬盘 {threshold_value(r, 'disk_alert'):.0f}%"
+    )
+
+
+# 覆盖详情：在原详情基础上补告警阈值，避免重写全部详情逻辑。
+_prev_remote_detail_text_threshold_patch = remote_detail_text
+
+def remote_detail_text(r):
+    text = _prev_remote_detail_text_threshold_patch(r)
+    line = alert_threshold_line(r)
+    if line in text:
+        return text
+    insert = "\n" + line + "\n"
+    if "━━━━━━━━━━━━━━\n👇" in text:
+        return text.replace("━━━━━━━━━━━━━━\n👇", "━━━━━━━━━━━━━━" + insert + "👇", 1)[:3900]
+    return (text + insert)[:3900]
+
+
+# 覆盖编辑菜单：加入阈值按钮。
+def edit_server_field_keyboard(sid):
+    return [
+        [
+            {"text": "🌐 编辑IP/主机", "callback_data": f"field:server:{sid}:host"},
+        ],
+        [
+            {"text": "🔥 CPU阈值", "callback_data": f"field:server:{sid}:cpu_alert"},
+            {"text": "🧠 内存阈值", "callback_data": f"field:server:{sid}:mem_alert"},
+            {"text": "💾 硬盘阈值", "callback_data": f"field:server:{sid}:disk_alert"},
+        ],
+        [
+            {"text": "💰 编辑价格", "callback_data": f"field:server:{sid}:price"},
+            {"text": "📆 编辑到期", "callback_data": f"field:server:{sid}:expire_at"},
+        ],
+        [
+            {"text": "🔁 编辑周期", "callback_data": f"field:server:{sid}:cycle"},
+            {"text": "📝 编辑备注", "callback_data": f"field:server:{sid}:note"},
+        ],
+        [
+            {"text": "🔌 编辑端口", "callback_data": f"field:server:{sid}:check_port"},
+            {"text": "🧬 编辑系统", "callback_data": f"field:server:{sid}:os_name"},
+        ],
+        [
+            {"text": "🏷️ 编辑名称", "callback_data": f"field:server:{sid}:name"},
+        ],
+        [
+            {"text": "🎁 永久免费", "callback_data": f"field:server:{sid}:free_forever"},
+            {"text": "🔁 自动续费", "callback_data": f"field:server:{sid}:auto_renew"},
+        ],
+        [{"text": "⬅️ 上一步：服务器详情", "callback_data": f"target:server:{sid}"}],
+        [
+            {"text": "📋 返回列表", "callback_data": "nav:servers"},
+            {"text": "📊 返回总览", "callback_data": "nav:dashboard"},
+            {"text": "🛠️ 工具", "callback_data": "nav:tools"},
+        ],
+    ]
+
+
+# 覆盖服务器详情按钮：直接给阈值快捷入口。
+def remote_detail_keyboard(sid):
+    return bottom_nav([
+        [
+            {"text": "🌐 流量", "callback_data": f"view:traffic:server:{sid}"},
+            {"text": "💾 磁盘", "callback_data": f"view:disk:server:{sid}"},
+            {"text": "🧾 事件", "callback_data": f"view:events:server:{sid}"},
+        ],
+        [
+            {"text": "✏️ 编辑", "callback_data": f"edit:server:{sid}"},
+            {"text": "🌐 改IP/主机", "callback_data": f"field:server:{sid}:host"},
+            {"text": "📡 探针", "callback_data": f"agent_cmd:{sid}"},
+        ],
+        [
+            {"text": "🔥 CPU阈值", "callback_data": f"field:server:{sid}:cpu_alert"},
+            {"text": "🧠 内存阈值", "callback_data": f"field:server:{sid}:mem_alert"},
+            {"text": "💾 硬盘阈值", "callback_data": f"field:server:{sid}:disk_alert"},
+        ],
+        [
+            {"text": "⏰ 续费", "callback_data": f"server_renew_help:{sid}"},
+            {"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"},
+            {"text": "🗑️ 删除服务器", "callback_data": f"delete_confirm:{sid}"},
+        ],
+        [
+            {"text": "💰 价格", "callback_data": f"field:server:{sid}:price"},
+            {"text": "📆 到期", "callback_data": f"field:server:{sid}:expire_at"},
+            {"text": "🔁 周期", "callback_data": f"field:server:{sid}:cycle"},
+        ],
+        [
+            {"text": "📝 备注", "callback_data": f"field:server:{sid}:note"},
+            {"text": "🔌 端口", "callback_data": f"field:server:{sid}:check_port"},
+            {"text": "🧬 系统", "callback_data": f"field:server:{sid}:os_name"},
+        ],
+        [
+            {"text": "🏷️ 名称", "callback_data": f"field:server:{sid}:name"},
+            {"text": "🎁 永久免费", "callback_data": f"field:server:{sid}:free_forever"},
+            {"text": "🔁 自动续费", "callback_data": f"field:server:{sid}:auto_renew"},
+        ],
+        [
+            {"text": "📆 +1月", "callback_data": f"renew_month:{sid}"},
+            {"text": "🗓️ +3月", "callback_data": f"renew_quarter:{sid}"},
+            {"text": "📅 +1年", "callback_data": f"renew_year:{sid}"},
+        ],
+    ])
+
+
+def cmd_set_threshold(chat_id, sid, field, value):
+    try:
+        row = update_server_field(sid, field, value)
+        send_inline(
+            chat_id,
+            f"✅🎯 <b>{h(field_cn(field))} 已更新</b>\n\n"
+            f"🖥️ 服务器：{h(row['name'])}\n"
+            f"🆔 ID：<code>{h(sid)}</code>\n"
+            f"{alert_threshold_line(row)}\n\n"
+            f"{remote_detail_text(row)}",
+            remote_detail_keyboard(sid)
+        )
+    except Exception as e:
+        send(chat_id, f"❌ 设置阈值失败：{h(e)}\n\n示例：<code>设置CPU阈值 {h(sid)} 90</code>", keyboard=False)
+
+
+# 最后一层文字命令：支持直接设置阈值。
+_prev_handle_threshold_patch = handle
+
+def handle(chat_id, text):
+    ct = clean_command_text(text)
+
+    patterns = [
+        (r"^(设置CPU阈值|编辑CPU阈值|CPU阈值)\s+(\d+)\s+(.+)$", "cpu_alert"),
+        (r"^(设置内存阈值|编辑内存阈值|内存阈值)\s+(\d+)\s+(.+)$", "mem_alert"),
+        (r"^(设置硬盘阈值|设置磁盘阈值|编辑硬盘阈值|编辑磁盘阈值|硬盘阈值|磁盘阈值)\s+(\d+)\s+(.+)$", "disk_alert"),
+    ]
+    for pat, field in patterns:
+        m = re.match(pat, ct, flags=re.I)
+        if m:
+            cmd_set_threshold(chat_id, m.group(2), field, m.group(3).strip())
+            return
+
+    return _prev_handle_threshold_patch(chat_id, text)
+
+
+# 秒回版 poll：先处理 TG，再后台任务；getUpdates timeout=1，避免点击按钮卡住。
+def poll():
+    offset = 0
+    last_online_check = 0
+    last_metric_check = 0
+    last_expiry_check = 0
+    set_bot_commands()
+
+    try:
+        tg("deleteWebhook", {"drop_pending_updates": False})
+    except Exception:
+        pass
+
+    while True:
+        try:
+            # 1) 优先处理 TG 消息和按钮，保证秒回。
+            try:
+                r = requests.get(
+                    f"{API}/getUpdates",
+                    params={
+                        "timeout": 1,
+                        "offset": offset,
+                        "allowed_updates": json.dumps(["message", "edited_message", "callback_query"])
+                    },
+                    timeout=5
+                ).json()
+            except Exception as e:
+                print(f"[BOT] getUpdates error: {e}", flush=True)
+                r = {"ok": False, "result": []}
+
+            if not r.get("ok", False):
+                if r:
+                    print(f"[BOT] getUpdates not ok: {r}", flush=True)
+                time.sleep(0.5)
+            else:
+                for item in r.get("result", []):
+                    offset = item["update_id"] + 1
+                    if item.get("callback_query"):
+                        handle_callback(item["callback_query"])
+                        continue
+                    msg = item.get("message") or item.get("edited_message")
+                    if not msg:
+                        continue
+                    chat_id = msg["chat"]["id"]
+                    text = msg.get("text", "").strip()
+                    if text:
+                        handle(chat_id, text)
+
+            # 2) 后台任务拆开跑，避免全部堆在 CHECK_INTERVAL 里。
+            now_ts = time.time()
+
+            if now_ts - last_online_check >= FAST_ONLINE_CHECK_INTERVAL:
+                try:
+                    monitor_server_online_status()
+                except Exception as e:
+                    print(f"[BOT] online monitor error: {e}", flush=True)
+                last_online_check = now_ts
+
+            if now_ts - last_metric_check >= FAST_METRIC_CHECK_INTERVAL:
+                try:
+                    monitor_local_system()
+                except Exception as e:
+                    print(f"[BOT] local monitor error: {e}", flush=True)
+                try:
+                    monitor_metric_alerts()
+                except Exception as e:
+                    print(f"[BOT] metric monitor error: {e}", flush=True)
+                last_metric_check = now_ts
+
+            if now_ts - last_expiry_check >= FAST_EXPIRY_CHECK_INTERVAL:
+                try:
+                    auto_renew_expired_online_servers()
+                    monitor_expiry()
+                except Exception as e:
+                    print(f"[BOT] expiry monitor error: {e}", flush=True)
+                last_expiry_check = now_ts
+
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            print(f"[BOT] loop error: {e}", flush=True)
+            time.sleep(0.5)
+
+
+_old_init_db_threshold_patch = init_db
+
+def init_db():
+    _old_init_db_threshold_patch()
+    ensure_alert_threshold_columns()
+
+
 if __name__ == "__main__":
     init_db()
     poll()
