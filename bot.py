@@ -3988,6 +3988,568 @@ def local_detail_text():
     )[:3900]
 
 
+
+
+# ============================================================
+# FINAL DELETE + DURATION + RENEW COUNTDOWN PATCH
+# 修正：
+# 1) 增加“选择服务器删除”完整按钮流程；
+# 2) 远程服务器在线时长改为“监控在线时长”，使用 online_since/offline_since 记录，避免用旧 last_changed_at 误导；
+# 3) 本机和所有服务器增加“续费倒计时”显示。
+# ============================================================
+
+def ensure_status_duration_columns():
+    try:
+        conn = db()
+        for col, definition in [
+            ("online_since", "TEXT DEFAULT ''"),
+            ("offline_since", "TEXT DEFAULT ''"),
+        ]:
+            ensure_column(conn, "server_status", col, definition)
+
+        rows = conn.execute("SELECT * FROM server_status").fetchall()
+        for st in rows:
+            status = (st["last_status"] or "").strip()
+            changed = st["last_changed_at"] or st["last_checked_at"] or now_text()
+            online_since = st["online_since"] if "online_since" in st.keys() else ""
+            offline_since = st["offline_since"] if "offline_since" in st.keys() else ""
+            if status == "online" and not online_since:
+                conn.execute("UPDATE server_status SET online_since=?, offline_since='' WHERE server_id=?", (changed, st["server_id"]))
+            elif status == "offline" and not offline_since:
+                conn.execute("UPDATE server_status SET offline_since=?, online_since='' WHERE server_id=?", (changed, st["server_id"]))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def renew_countdown_text(expire_at, free_forever=False):
+    if truthy(free_forever) or str(expire_at or "").strip() in ["永久", "永久免费"]:
+        return "🎁 永久免费｜无需续费"
+    exp = str(expire_at or "").strip()
+    if not exp:
+        return "未设置"
+    try:
+        days = (parse_date(exp).date() - datetime.now().date()).days
+        if days < 0:
+            return f"🚨 已过期 {abs(days)} 天｜请尽快续费"
+        if days == 0:
+            return "🚨 今天到期｜请今天续费"
+        if days <= 3:
+            return f"🚨 剩余 {days} 天｜非常紧急"
+        if days <= 7:
+            return f"⚠️ 剩余 {days} 天｜建议续费"
+        if days <= 30:
+            return f"⏰ 剩余 {days} 天"
+        return f"✅ 剩余 {days} 天"
+    except Exception:
+        return "未知"
+
+
+def local_renew_countdown_text():
+    p = get_local_profile()
+    return renew_countdown_text(p.get("expire_at"), False)
+
+
+def duration_from_seconds(seconds):
+    try:
+        seconds = int(max(0, float(seconds)))
+    except Exception:
+        return "未知"
+    days = seconds // 86400
+    hours = seconds % 86400 // 3600
+    minutes = seconds % 3600 // 60
+    if days > 0:
+        return f"{days} 天 {hours} 小时 {minutes} 分钟"
+    if hours > 0:
+        return f"{hours} 小时 {minutes} 分钟"
+    return f"{minutes} 分钟"
+
+
+def duration_since_text(dt_text):
+    if not dt_text:
+        return "刚刚记录"
+    try:
+        return duration_from_seconds((datetime.now() - parse_date(str(dt_text))).total_seconds())
+    except Exception:
+        return "未知"
+
+
+def local_online_duration_text():
+    try:
+        return duration_from_seconds(time.time() - psutil.boot_time())
+    except Exception:
+        return uptime_text()
+
+
+def get_server_status_row(sid):
+    try:
+        ensure_status_duration_columns()
+        conn = db()
+        row = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+        conn.close()
+        return row
+    except Exception:
+        return None
+
+
+def server_monitor_duration_text(r, online=None):
+    """
+    远程服务器无法只靠端口检测读取真实系统 uptime。
+    这里显示的是“监控在线/离线时长”：从机器人确认状态变化开始计时。
+    如需真实系统运行时长，需要给远程服务器部署探针。
+    """
+    try:
+        if online is None:
+            online = check_tcp(r["host"], r["check_port"], timeout=3)
+        st = get_server_status_row(r["id"])
+        if not st:
+            return "刚刚记录"
+        status = (st["last_status"] or "").strip()
+        if online:
+            start = ""
+            if "online_since" in st.keys() and st["online_since"]:
+                start = st["online_since"]
+            elif status == "online":
+                start = st["last_changed_at"] or st["last_checked_at"]
+            else:
+                return "等待确认"
+            return duration_since_text(start)
+        start = ""
+        if "offline_since" in st.keys() and st["offline_since"]:
+            start = st["offline_since"]
+        elif status == "offline":
+            start = st["last_changed_at"] or st["last_checked_at"]
+        else:
+            return "等待确认"
+        return duration_since_text(start)
+    except Exception:
+        return "未知"
+
+
+def local_profile_lines():
+    p = get_local_profile()
+    name = one_line(p.get('name'), socket.gethostname())
+    note = one_line(p.get('note'), '无')
+    cycle = normalize_cycle(one_line(p.get('cycle'), 'monthly'))
+    if cycle not in ["monthly", "quarterly", "yearly"]:
+        cycle = "monthly"
+    currency = normalize_currency(one_line(p.get('currency'), 'USD'))
+    if currency not in ["CNY", "USD", "EUR", "GBP"]:
+        currency = "USD"
+    price = one_line(p.get('price'), '0')
+    return (
+        f"🏷️ 管理名称：{h(name)}\n"
+        f"📝 本机备注：{h(note)}\n"
+        f"🔁 付费周期：{cycle_name(cycle)}\n"
+        f"💰 付费价格：{currency_name(currency)} {h(price)} {h(currency)}\n"
+        f"📆 到期时间：{local_expire_text(p)}\n"
+        f"⏳ 续费倒计时：{h(local_renew_countdown_text())}"
+    )
+
+
+def status_block():
+    s = get_local_status()
+    local_place = " ".join(x for x in [s.get("country"), s.get("region"), s.get("city")] if x and x != "未知")
+    return (
+        "🖥️ <b>本机状态</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🌐 主机名称：<code>{h(s['hostname'])}</code>\n"
+        f"🌍 公网 IP：<code>{h(s.get('public_ip', '未知'))}</code>\n"
+        f"📍 国家地区：{h(s.get('flag', '🌐'))} {h(local_place or s.get('country') or '未知')}\n"
+        f"🏢 运营商：{h(s.get('isp') or '未知')}\n"
+        f"🧬 系统版本：{h(s['os'])}\n"
+        f"{local_profile_lines()}\n"
+        f"🟢 在线时长：{h(local_online_duration_text())}\n"
+        f"⏱️ 运行时间：{h(s['uptime'])}\n"
+        f"📊 CPU 使用率：{s['cpu']:.0f}%\n"
+        f"⚙️ 系统负载：{s['load1']:.2f} / {s['load5']:.2f} / {s['load15']:.2f}\n"
+        f"🧩 CPU 核心：{s['cpu_count']} 核\n"
+        f"🧠 内存使用：{fmt_size(s['mem_used'])} / {fmt_size(s['mem_total'])} ({s['mem_percent']:.0f}%)\n"
+        f"💾 磁盘使用：{fmt_size(s['disk_used'])} / {fmt_size(s['disk_total'])} ({s['disk_percent']:.0f}%)"
+    )
+
+
+def compact_local_row():
+    s = get_local_status()
+    p = get_local_profile()
+    name = one_line(p.get("name"), socket.gethostname())
+    online_time = local_online_duration_text()
+    return {
+        "id": "local",
+        "name": name,
+        "label": f"🟢 {s.get('flag','🌐')} 🏠 本机｜{name}｜在线 {online_time}｜续费 {local_renew_countdown_text()}",
+        "short": f"🟢 本机｜{name}｜在线 {online_time}",
+    }
+
+
+def server_button_label(r):
+    online = check_tcp(r["host"], r["check_port"], timeout=3)
+    status = "🟢" if online else "🔴"
+    state = "在线" if online else "离线"
+    flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+    free = "🎁" if is_free_forever_row(r) else ""
+    auto = "🔁" if is_auto_renew_row(r) else ""
+    duration = server_monitor_duration_text(r, online)
+    countdown = renew_countdown_text(r["expire_at"], is_free_forever_row(r))
+    return f"{status} {flag}{free}{auto} ID{r['id']}｜{r['name']}｜{state} {duration}｜续费 {countdown}"
+
+
+def remote_detail_text(r):
+    online = check_tcp(r["host"], r["check_port"], timeout=3)
+    status_text = "🟢 在线" if online else "🔴 离线"
+    duration_label = "🟢 监控在线时长" if online else "🔴 监控离线时长"
+    duration = server_monitor_duration_text(r, online)
+    free = is_free_forever_row(r)
+    auto = is_auto_renew_row(r)
+    return (
+        "🖥️✨ <b>服务器详情</b> ✨🖥️\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📡 状态：{status_text}\n"
+        f"{duration_label}：{h(duration)}\n"
+        f"🆔 ID：<code>{r['id']}</code>\n"
+        f"🖥️ 名称：{h(r['name'])}\n"
+        f"🌐 主机：<code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📍 地区：{server_location_line(r)}\n"
+        f"🏢 运营商：{h(r['isp'] if 'isp' in r.keys() and r['isp'] else '未知')}\n"
+        f"🧬 系统：{h(r['os_name'] if 'os_name' in r.keys() and r['os_name'] else '未知系统')}\n"
+        f"📝 备注：{h(r['note'] or '无')}\n"
+        f"🎁 永久免费：{bool_text(free)}\n"
+        f"🔁 自动续费：{bool_text(auto)}\n"
+        f"💰 价格：{server_price_line(r)}\n"
+        f"📆 到期：{h(r['expire_at'] if r['expire_at'] else '未设置')}｜{expire_status_text(r['expire_at'], free)}\n"
+        f"⏳ 续费倒计时：{h(renew_countdown_text(r['expire_at'], free))}\n"
+        "━━━━━━━━━━━━━━\n"
+        "📌 说明：远程服务器这里显示的是机器人监控到的在线/离线持续时间；如需真实系统 uptime，请部署探针。\n\n"
+        "👇 <b>下一步：</b>查看该服务器流量/磁盘/事件，或编辑续费。"
+    )[:3900]
+
+
+def servers_summary_block():
+    refresh_missing_meta()
+    rows = get_all_servers(order="id") if "get_all_servers" in globals() else []
+    if not rows:
+        conn = db()
+        rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+        conn.close()
+    if not rows:
+        return "📡 <b>服务器在线情况</b>\n━━━━━━━━━━━━━━\n📭 暂无服务器记录。\n发送 <code>添加服务器</code> 开始添加。"
+    online_count = 0
+    offline_count = 0
+    lines = []
+    for r in rows:
+        online = check_tcp(r["host"], r["check_port"], timeout=3)
+        duration = server_monitor_duration_text(r, online)
+        countdown = renew_countdown_text(r["expire_at"], is_free_forever_row(r))
+        if online:
+            online_count += 1
+            status = "🟢 在线"
+            duration_label = f"在线 {duration}"
+        else:
+            offline_count += 1
+            status = "🔴 离线"
+            duration_label = f"离线 {duration}"
+        flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+        lines.append(f"{status}｜{flag} {h(r['name'])}｜{h(duration_label)}｜续费 {h(countdown)}")
+    return (
+        "📡 <b>服务器在线情况</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🟢 在线：{online_count} 台\n"
+        f"🔴 离线：{offline_count} 台\n"
+        f"📦 总数：{len(rows)} 台\n\n" + "\n".join(lines[:12])
+    )
+
+
+# 覆盖监控函数：增加 online_since/offline_since，状态时长从确认状态变化开始计算。
+def monitor_server_online_status():
+    conn = db()
+    for col, definition in [
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("success_count", "INTEGER DEFAULT 0"),
+        ("notified_offline", "INTEGER DEFAULT 0"),
+        ("first_fail_at", "TEXT DEFAULT ''"),
+        ("first_recover_at", "TEXT DEFAULT ''"),
+        ("online_since", "TEXT DEFAULT ''"),
+        ("offline_since", "TEXT DEFAULT ''"),
+    ]:
+        ensure_column(conn, "server_status", col, definition)
+    conn.commit()
+
+    rows = conn.execute("SELECT * FROM servers").fetchall()
+    now_dt = datetime.now()
+    now = now_text()
+
+    for r in rows:
+        sid = r["id"]
+        raw_online = check_tcp(r["host"], r["check_port"], timeout=5)
+        old = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+
+        if not old:
+            status = "online" if raw_online else "unknown"
+            conn.execute(
+                "INSERT INTO server_status(server_id,last_status,last_checked_at,last_changed_at,fail_count,success_count,notified_offline,first_fail_at,first_recover_at,online_since,offline_since) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (sid, status, now, now, 0 if raw_online else 1, 1 if raw_online else 0, 0, "" if raw_online else now, "", now if raw_online else "", "")
+            )
+            conn.commit()
+            continue
+
+        old_status = old["last_status"] or "unknown"
+        notified = int(old["notified_offline"] if "notified_offline" in old.keys() and old["notified_offline"] is not None else 0)
+        first_fail_at = old["first_fail_at"] if "first_fail_at" in old.keys() and old["first_fail_at"] else ""
+        first_recover_at = old["first_recover_at"] if "first_recover_at" in old.keys() and old["first_recover_at"] else ""
+
+        try:
+            fail_elapsed = (now_dt - parse_date(first_fail_at)).total_seconds() if first_fail_at else 0
+        except Exception:
+            fail_elapsed = 0
+        try:
+            recover_elapsed = (now_dt - parse_date(first_recover_at)).total_seconds() if first_recover_at else 0
+        except Exception:
+            recover_elapsed = 0
+
+        if raw_online:
+            if old_status == "offline" and notified == 1:
+                if not first_recover_at:
+                    conn.execute("UPDATE server_status SET first_recover_at=?, last_checked_at=? WHERE server_id=?", (now, now, sid))
+                    conn.commit()
+                elif recover_elapsed >= RECOVERY_STABLE_SECONDS:
+                    conn.execute(
+                        "UPDATE server_status SET last_status='online', last_checked_at=?, last_changed_at=?, fail_count=0, success_count=1, notified_offline=0, first_fail_at='', first_recover_at='', online_since=?, offline_since='' WHERE server_id=?",
+                        (now, now, now, sid)
+                    )
+                    conn.commit()
+                    push_event("online", f"服务器恢复在线：{r['name']}", online_push_text(r))
+                else:
+                    conn.execute("UPDATE server_status SET last_checked_at=? WHERE server_id=?", (now, sid))
+                    conn.commit()
+            else:
+                online_since = old["online_since"] if "online_since" in old.keys() and old["online_since"] else ""
+                if old_status != "online":
+                    online_since = now
+                elif not online_since:
+                    online_since = old["last_changed_at"] or now
+                conn.execute(
+                    "UPDATE server_status SET last_status='online', last_checked_at=?, fail_count=0, success_count=success_count+1, first_fail_at='', first_recover_at='', online_since=?, offline_since='' WHERE server_id=?",
+                    (now, online_since, sid)
+                )
+                conn.commit()
+        else:
+            if old_status != "offline":
+                if not first_fail_at:
+                    conn.execute("UPDATE server_status SET first_fail_at=?, last_checked_at=?, fail_count=1 WHERE server_id=?", (now, now, sid))
+                    conn.commit()
+                elif fail_elapsed >= OFFLINE_GRACE_SECONDS:
+                    conn.execute(
+                        "UPDATE server_status SET last_status='offline', last_checked_at=?, last_changed_at=?, fail_count=fail_count+1, success_count=0, notified_offline=1, first_recover_at='', offline_since=?, online_since='' WHERE server_id=?",
+                        (now, now, now, sid)
+                    )
+                    conn.commit()
+                    push_event("offline", f"服务器离线：{r['name']}", offline_push_text(r))
+                else:
+                    conn.execute("UPDATE server_status SET last_checked_at=?, fail_count=fail_count+1 WHERE server_id=?", (now, sid))
+                    conn.commit()
+            else:
+                offline_since = old["offline_since"] if "offline_since" in old.keys() and old["offline_since"] else (old["last_changed_at"] or now)
+                conn.execute(
+                    "UPDATE server_status SET last_checked_at=?, fail_count=fail_count+1, success_count=0, first_recover_at='', offline_since=?, online_since='' WHERE server_id=?",
+                    (now, offline_since, sid)
+                )
+                conn.commit()
+
+    conn.close()
+
+
+def delete_select_text():
+    rows = get_all_servers(order="id") if "get_all_servers" in globals() else []
+    if not rows:
+        conn = db()
+        rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+        conn.close()
+    if not rows:
+        return "🗑️✨ <b>删除服务器</b> ✨🗑️\n\n📭 当前没有可删除的服务器。"
+    return (
+        "🗑️✨ <b>选择要删除的服务器</b> ✨🗑️\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "⚠️ 删除后会同时清理该服务器的状态、提醒记录。\n\n"
+        "👇 请点击下面任意服务器进入删除确认。"
+    )
+
+
+def delete_select_keyboard():
+    rows = get_all_servers(order="id") if "get_all_servers" in globals() else []
+    if not rows:
+        conn = db()
+        rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+        conn.close()
+    kb = []
+    for r in rows:
+        flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+        kb.append([{"text": f"🗑️ {flag} ID{r['id']}｜{r['name']}｜{r['host']}", "callback_data": f"delete_confirm:{r['id']}"}])
+    kb.extend(bottom_nav())
+    return kb
+
+
+def delete_confirm_text(sid):
+    r = get_server_row(sid)
+    if not r:
+        return "❌ 没有找到这个服务器，可能已经被删除。"
+    return (
+        "⚠️🗑️ <b>确认删除服务器？</b> 🗑️⚠️\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🆔 ID：<code>{r['id']}</code>\n"
+        f"🖥️ 名称：{h(r['name'])}\n"
+        f"🌐 主机：<code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📍 地区：{server_location_line(r)}\n"
+        "━━━━━━━━━━━━━━\n"
+        "⚠️ 删除后会清理该服务器的：资料、状态、到期提醒。\n\n"
+        "确认删除请点击下面红色按钮。"
+    )
+
+
+def delete_confirm_keyboard(sid):
+    return [
+        [{"text": "🚨 确认删除这台服务器", "callback_data": f"delete_do:{sid}"}],
+        [{"text": "⬅️ 取消，返回详情", "callback_data": f"target:server:{sid}"}],
+        [{"text": "📋 返回列表", "callback_data": "nav:servers"}, {"text": "📊 返回总览", "callback_data": "nav:dashboard"}],
+    ]
+
+
+def delete_server_by_id(sid):
+    r = get_server_row(sid)
+    if not r:
+        return None
+    conn = db()
+    conn.execute("DELETE FROM servers WHERE id=?", (sid,))
+    conn.execute("DELETE FROM server_status WHERE server_id=?", (sid,))
+    conn.execute("DELETE FROM reminders WHERE server_id=?", (sid,))
+    conn.commit()
+    conn.close()
+    event_add("action", "删除服务器", f"已删除服务器 ID {sid}：{r['name']} / {r['host']}")
+    return r
+
+
+# 覆盖服务器详情按钮：增加“删除服务器”明确入口。
+def remote_detail_keyboard(sid):
+    return bottom_nav([
+        [
+            {"text": "🌐 流量", "callback_data": f"view:traffic:server:{sid}"},
+            {"text": "💾 磁盘", "callback_data": f"view:disk:server:{sid}"},
+            {"text": "🧾 事件", "callback_data": f"view:events:server:{sid}"},
+        ],
+        [
+            {"text": "✏️ 编辑", "callback_data": f"edit:server:{sid}"},
+            {"text": "⏰ 续费", "callback_data": f"server_renew_help:{sid}"},
+            {"text": "📡 探针", "callback_data": f"agent_cmd:{sid}"},
+        ],
+        [
+            {"text": "💰 价格", "callback_data": f"field:server:{sid}:price"},
+            {"text": "📆 到期", "callback_data": f"field:server:{sid}:expire_at"},
+            {"text": "🔁 周期", "callback_data": f"field:server:{sid}:cycle"},
+        ],
+        [
+            {"text": "📝 备注", "callback_data": f"field:server:{sid}:note"},
+            {"text": "🔌 端口", "callback_data": f"field:server:{sid}:check_port"},
+            {"text": "🧬 系统", "callback_data": f"field:server:{sid}:os_name"},
+        ],
+        [
+            {"text": "🏷️ 名称", "callback_data": f"field:server:{sid}:name"},
+            {"text": "🎁 永久免费", "callback_data": f"field:server:{sid}:free_forever"},
+            {"text": "🔁 自动续费", "callback_data": f"field:server:{sid}:auto_renew"},
+        ],
+        [
+            {"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"},
+            {"text": "🗑️ 删除服务器", "callback_data": f"delete_confirm:{sid}"},
+        ],
+        [
+            {"text": "📆 +1月", "callback_data": f"renew_month:{sid}"},
+            {"text": "🗓️ +3月", "callback_data": f"renew_quarter:{sid}"},
+            {"text": "📅 +1年", "callback_data": f"renew_year:{sid}"},
+        ],
+    ])
+
+
+_prev_handle_callback_delete_duration = handle_callback
+
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if not is_admin(chat_id):
+            answer_callback(callback_id, "未授权")
+            return
+
+        if data == "nav:delete" or data == "delete:select":
+            answer_callback(callback_id, "选择删除")
+            edit_inline_message(chat_id, message_id, delete_select_text(), delete_select_keyboard())
+            return
+
+        if data.startswith("delete_confirm:"):
+            sid = data.split(":", 1)[1]
+            answer_callback(callback_id, "删除确认")
+            edit_inline_message(chat_id, message_id, delete_confirm_text(sid), delete_confirm_keyboard(sid))
+            return
+
+        if data.startswith("delete_do:"):
+            sid = data.split(":", 1)[1]
+            r = delete_server_by_id(sid)
+            answer_callback(callback_id, "已删除" if r else "不存在")
+            if not r:
+                edit_inline_message(chat_id, message_id, "❌ 服务器不存在或已经被删除。", bottom_nav())
+                return
+            edit_inline_message(
+                chat_id,
+                message_id,
+                "✅🗑️ <b>服务器已删除</b>\n\n"
+                f"🆔 ID：<code>{h(sid)}</code>\n"
+                f"🖥️ 名称：{h(r['name'])}\n"
+                f"🌐 主机：<code>{h(r['host'])}</code>\n\n"
+                "已清理该服务器的状态和提醒记录。",
+                bottom_nav([[{"text": "📋 继续查看列表", "callback_data": "nav:servers"}]])
+            )
+            return
+
+    except Exception as e:
+        try:
+            answer_callback(callback.get("id"), "操作失败")
+            send(callback.get("message", {}).get("chat", {}).get("id"), f"❌ 删除/按钮操作失败：{h(e)}", keyboard=False)
+        except Exception:
+            pass
+        return
+
+    return _prev_handle_callback_delete_duration(callback)
+
+
+_prev_handle_delete_duration = handle
+
+def handle(chat_id, text):
+    ct = clean_command_text(text)
+
+    if ct in ["删除服务器", "删除机器", "移除服务器", "/delete_server"]:
+        send_inline(chat_id, delete_select_text(), delete_select_keyboard())
+        return
+
+    m = re.match(r"^(删除服务器|删除机器|移除服务器)\s+(\d+)$", ct)
+    if m:
+        sid = m.group(2)
+        send_inline(chat_id, delete_confirm_text(sid), delete_confirm_keyboard(sid))
+        return
+
+    return _prev_handle_delete_duration(chat_id, text)
+
+
+# 启动时确保新增字段存在。
+_old_init_db_delete_duration = init_db
+
+def init_db():
+    _old_init_db_delete_duration()
+    ensure_status_duration_columns()
+
+
 if __name__ == "__main__":
     init_db()
     poll()
