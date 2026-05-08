@@ -5158,23 +5158,22 @@ def init_db():
 
 
 # ============================================================
-# FINAL SERVER HOST/IP EDIT + ID REUSE PATCH
-# 修正：
-# 1) 新增服务器 IP / 主机编辑功能；
-# 2) 删除最大 ID 后再次添加，不再跳号，例如删除 ID6 后再添加仍是 ID6；
-# 3) 修改 IP 后自动刷新地区/运营商、重新检测状态、清理旧探针缓存。
+# FINAL PATCH: 编辑服务器 IP / ID 不跳号 / 本机一键探针入口
+# 只追加覆盖最后一层函数，不删除原逻辑。
 # ============================================================
 
 def reset_server_id_sequence():
-    """让 AUTOINCREMENT 继续从当前最大 ID 后面开始，避免删除最大 ID 后跳号。"""
+    """
+    修复 SQLite AUTOINCREMENT 删除最大 ID 后继续跳号的问题。
+    例如当前最大 ID=6，删除 6 后会把 sqlite_sequence 重置为 5，
+    下一次添加服务器继续使用 ID=6。
+    """
     try:
         conn = db()
         max_id = conn.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM servers").fetchone()["max_id"]
-        # sqlite_sequence 只有 AUTOINCREMENT 表产生过数据后才存在；失败也不影响主流程。
         try:
             conn.execute("UPDATE sqlite_sequence SET seq=? WHERE name='servers'", (int(max_id),))
-            if conn.total_changes == 0:
-                conn.execute("INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES('servers', ?)", (int(max_id),))
+            conn.execute("INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES('servers', ?)", (int(max_id),))
         except Exception:
             pass
         conn.commit()
@@ -5193,9 +5192,8 @@ def validate_host_value(value):
         raise ValueError("这里只填写 IP 或域名，不要带 http:// 或 https://")
     if "/" in value or " " in value:
         raise ValueError("IP / 主机格式不正确")
-    # 当前 check_tcp 使用 IPv4 socket，避免误填 host:port 或 IPv6 导致检测异常。
     if ":" in value:
-        raise ValueError("不要在主机里带端口；端口请用“编辑端口”。暂不建议在这里填写 IPv6。")
+        raise ValueError("不要在主机里带端口；端口请单独用“编辑端口”。")
     return value
 
 
@@ -5214,15 +5212,19 @@ def refresh_server_meta_after_host_change(sid, host):
         "UPDATE servers SET country=?, country_code=?, region=?, city=?, isp=?, last_meta_at=? WHERE id=?",
         (meta["country"], meta["country_code"], meta["region"], meta["city"], meta["isp"], now_text(), sid)
     )
+
+    # IP/主机变更后，状态重新按新地址检测，避免旧状态误导。
     conn.execute(
         "INSERT OR REPLACE INTO server_status(server_id,last_status,last_checked_at,last_changed_at) VALUES(?,?,?,?)",
         (sid, status, now_text(), now_text())
     )
-    # IP 换了以后，旧探针数据可能属于旧机器，清理掉避免误显示。
+
+    # 如果启用了探针数据缓存，换 IP 后旧探针数据可能属于旧机器，清掉。
     try:
         conn.execute("DELETE FROM server_metrics WHERE server_id=?", (sid,))
     except Exception:
         pass
+
     conn.commit()
     row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
     conn.close()
@@ -5246,7 +5248,7 @@ def update_server_host(sid, value):
     return new_row or get_server_row(sid), old_host, host, online
 
 
-# 覆盖字段名称/示例，增加 IP/主机字段。
+# 覆盖字段中文名，加入 host。
 def field_cn(field):
     return {
         "host": "IP / 主机",
@@ -5315,7 +5317,34 @@ def edit_server_field_keyboard(sid):
     ]
 
 
-# 覆盖服务器详情按钮，直接显示编辑 IP/主机入口。
+# 覆盖本机详情按钮，加入“一键部署探针”入口。
+def local_detail_keyboard():
+    return bottom_nav([
+        [
+            {"text": "🌐 本机流量", "callback_data": "view:traffic:local"},
+            {"text": "💾 本机磁盘", "callback_data": "view:disk:local"},
+        ],
+        [
+            {"text": "🧾 本机事件", "callback_data": "view:events:local"},
+            {"text": "✏️ 编辑本机", "callback_data": "edit:local"},
+        ],
+        [
+            {"text": "📡 本机一键部署探针", "callback_data": "agent_cmd:local"},
+        ],
+        [
+            {"text": "💰 价格", "callback_data": "field:local:0:price"},
+            {"text": "📆 到期", "callback_data": "field:local:0:expire_at"},
+            {"text": "🔁 周期", "callback_data": "field:local:0:cycle"},
+        ],
+        [
+            {"text": "📝 备注", "callback_data": "field:local:0:note"},
+            {"text": "🏷️ 名称", "callback_data": "field:local:0:name"},
+        ],
+        [{"text": "🌍 刷新本机地区", "callback_data": "local:refresh_meta"}],
+    ])
+
+
+# 覆盖服务器详情按钮，直接加入“改IP/主机”。
 def remote_detail_keyboard(sid):
     return bottom_nav([
         [
@@ -5356,7 +5385,7 @@ def remote_detail_keyboard(sid):
     ])
 
 
-# 包装字段更新函数，只新增 host/ip，其它字段继续走原逻辑。
+# 包装字段保存函数：只新增 host/ip，其它字段走旧逻辑。
 _prev_update_server_field_host_patch = update_server_field
 
 def update_server_field(sid, field, value):
@@ -5366,7 +5395,7 @@ def update_server_field(sid, field, value):
     return _prev_update_server_field_host_patch(sid, field, value)
 
 
-# 包装 pending 输入，给改 IP 成功后补充重新部署探针提醒。
+# 包装 pending 输入：点击“编辑IP/主机”后，用户发新 IP 时走这里。
 _prev_process_pending_input_host_patch = process_pending_input
 
 def process_pending_input(chat_id, text):
@@ -5386,7 +5415,7 @@ def process_pending_input(chat_id, text):
                 f"当前检测：{status_text}\n\n"
                 "📌 已自动刷新国家地区/运营商。\n"
                 "📌 已清理旧探针缓存。\n"
-                "📌 如果这台是新机器，请重新点击 <b>📡 探针</b> 部署新版探针。\n\n"
+                "📌 如果这是新机器，请重新点击 <b>📡 探针</b> 部署新版探针。\n\n"
                 f"{remote_detail_text(new_row)}",
                 remote_detail_keyboard(sid)
             )
@@ -5414,7 +5443,7 @@ def update_host_command(chat_id, sid, value):
             f"当前检测：{status_text}\n\n"
             "📌 已自动刷新国家地区/运营商。\n"
             "📌 已清理旧探针缓存。\n"
-            "📌 如果这台是新机器，请重新点击 <b>📡 探针</b> 部署新版探针。\n\n"
+            "📌 如果这是新机器，请重新点击 <b>📡 探针</b> 部署新版探针。\n\n"
             f"{remote_detail_text(new_row)}",
             remote_detail_keyboard(sid)
         )
@@ -5422,7 +5451,22 @@ def update_host_command(chat_id, sid, value):
         send(chat_id, f"❌ 编辑服务器 IP / 主机失败：{h(e)}\n\n示例：<code>编辑IP {h(sid)} 1.2.3.4</code>")
 
 
-# 包装删除函数：删除后重置 ID 序列。
+def cmd_local_agent_command(chat_id):
+    """
+    本机就是主控服务器，状态/CPU/内存/磁盘/流量已经由 bot.py 直接读取。
+    这里保留按钮入口，避免本机页面缺少“一键部署探针”功能。
+    """
+    send_inline(chat_id, (
+        "📡✨ <b>本机一键部署探针</b> ✨📡\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "🏠 <b>说明：</b>本机就是主控服务器，机器人已经直接读取本机真实数据：CPU、内存、磁盘、流量、运行时间。\n\n"
+        "✅ 所以本机通常 <b>不需要额外安装探针</b>。\n\n"
+        "如果你想把本机也当成“远程服务器”一样用探针上报，请先把本机公网 IP 添加为一台服务器，然后进入那台服务器详情点击 <b>📡 探针</b>。\n"
+        "━━━━━━━━━━━━━━"
+    ), bottom_nav([[{"text": "🏠 返回本机详情", "callback_data": "target:local"}]]))
+
+
+# 包装删除函数：所有使用 delete_server_by_id 的删除都会重置 ID。
 _prev_delete_server_by_id_host_patch = delete_server_by_id
 
 def delete_server_by_id(sid):
@@ -5431,7 +5475,7 @@ def delete_server_by_id(sid):
     return r
 
 
-# 包装添加函数：添加前重置序列，解决删除最大 ID 后再添加跳号。
+# 包装添加：添加前校正 sqlite_sequence，删除最大 ID 后新建不会跳号。
 _prev_cmd_add_server_host_patch = cmd_add_server
 
 def cmd_add_server(chat_id, text):
@@ -5439,7 +5483,7 @@ def cmd_add_server(chat_id, text):
     return _prev_cmd_add_server_host_patch(chat_id, text)
 
 
-# 最后层 callback，优先接管删除，确保所有按钮删除后都会重置 ID 序列。
+# 最后一层 callback：优先接管本机探针和删除确认，避免旧 callback 先执行。
 _prev_handle_callback_host_patch = handle_callback
 
 def handle_callback(callback):
@@ -5449,6 +5493,14 @@ def handle_callback(callback):
         msg = callback.get("message") or {}
         chat_id = msg.get("chat", {}).get("id")
         message_id = msg.get("message_id")
+
+        if data == "agent_cmd:local":
+            if not is_admin(chat_id):
+                answer_callback(callback_id, "未授权")
+                return
+            answer_callback(callback_id, "本机探针")
+            cmd_local_agent_command(chat_id)
+            return
 
         if data.startswith("delete_do:"):
             if not is_admin(chat_id):
@@ -5482,7 +5534,7 @@ def handle_callback(callback):
     return _prev_handle_callback_host_patch(callback)
 
 
-# 最后层文字命令，支持编辑IP/主机，并兼容批量编辑。
+# 最后一层文字命令：支持编辑IP/主机，并兼容多行批量。
 _prev_handle_host_patch = handle
 
 def handle(chat_id, text):
@@ -5493,10 +5545,10 @@ def handle(chat_id, text):
         update_host_command(chat_id, m.group(2), m.group(3).strip())
         return
 
-    # 兼容批量粘贴里包含编辑IP。
     if "\n" in str(text or ""):
         lines = split_command_lines(text)
-        if lines and all(line.startswith(("编辑IP", "编辑ip", "编辑主机", "编辑地址", "修改IP", "修改ip", "修改主机", "修改地址", LOCAL_EDIT_PREFIXES, SERVER_EDIT_PREFIXES)) for line in lines):
+        edit_prefixes = ("编辑IP", "编辑ip", "编辑主机", "编辑地址", "修改IP", "修改ip", "修改主机", "修改地址")
+        if lines and all(line.startswith(edit_prefixes + LOCAL_EDIT_PREFIXES + SERVER_EDIT_PREFIXES) for line in lines):
             for line in lines:
                 mm = re.match(r"^(编辑IP|编辑ip|编辑主机|编辑地址|修改IP|修改ip|修改主机|修改地址)\s+(\d+)\s+(.+)$", line)
                 if mm:
@@ -5508,7 +5560,7 @@ def handle(chat_id, text):
     return _prev_handle_host_patch(chat_id, text)
 
 
-# 启动时顺手校正一次序列。
+# 启动时校正一次编号序列。
 _old_init_db_host_patch = init_db
 
 def init_db():
