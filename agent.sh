@@ -3,209 +3,199 @@ set -e
 
 APP_DIR="/opt/server-monitor-agent"
 SERVICE_NAME="server-monitor-agent"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-ENV_FILE="${APP_DIR}/.env"
-WORKER="${APP_DIR}/agent-worker.sh"
-
+URL=""
+SECRET=""
+SID=""
+NAME="server"
 BOT_TOKEN=""
 CHAT_ID=""
-NODE_NAME="$(hostname)"
 INTERVAL="60"
-DISK_ALERT="90"
-MEM_ALERT="90"
-CPU_LOAD_ALERT="90"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -t|--token) BOT_TOKEN="$2"; shift 2 ;;
-    -c|--chat) CHAT_ID="$2"; shift 2 ;;
-    -n|--name) NODE_NAME="$2"; shift 2 ;;
-    -i|--interval) INTERVAL="$2"; shift 2 ;;
-    --uninstall)
-      systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
-      rm -f "$SERVICE_FILE"
-      systemctl daemon-reload 2>/dev/null || true
-      rm -rf "$APP_DIR"
-      echo "✅ server-monitor-agent 已卸载干净"
-      exit 0
-      ;;
+    --url) URL="$2"; shift 2 ;;
+    --secret) SECRET="$2"; shift 2 ;;
+    --sid) SID="$2"; shift 2 ;;
+    --name) NAME="$2"; shift 2 ;;
+    --token) BOT_TOKEN="$2"; shift 2 ;;
+    --chat) CHAT_ID="$2"; shift 2 ;;
+    --interval) INTERVAL="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "❌ 请使用 root 执行，或前面加 sudo"
+  echo "❌ 请使用 root 执行"
   exit 1
 fi
 
-if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
-  echo "❌ 缺少 BOT_TOKEN 或 CHAT_ID"
-  echo "用法：bash agent.sh --token <BOT_TOKEN> --chat <TG数字ID> --name <服务器名称>"
+if [ -z "$URL" ] || [ -z "$SECRET" ] || [ -z "$SID" ]; then
+  echo "❌ 缺少参数：--url --secret --sid"
   exit 1
 fi
 
 mkdir -p "$APP_DIR"
-cat > "$ENV_FILE" <<EOF
-BOT_TOKEN='$BOT_TOKEN'
-CHAT_ID='$CHAT_ID'
-NODE_NAME='$NODE_NAME'
-INTERVAL='$INTERVAL'
-DISK_ALERT='$DISK_ALERT'
-MEM_ALERT='$MEM_ALERT'
-CPU_LOAD_ALERT='$CPU_LOAD_ALERT'
-EOF
-chmod 600 "$ENV_FILE"
 
-cat > "$WORKER" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+cat > "$APP_DIR/agent.py" <<'PY'
+#!/usr/bin/env python3
+import os, time, json, socket, urllib.request, urllib.error, subprocess
 
-source /opt/server-monitor-agent/.env
-API="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
-STATE_DIR="/opt/server-monitor-agent/state"
-mkdir -p "$STATE_DIR"
+URL = os.environ.get("AGENT_URL", "")
+SECRET = os.environ.get("AGENT_SECRET", "")
+SID = os.environ.get("SERVER_ID", "")
+NAME = os.environ.get("SERVER_NAME", "server")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "")
+INTERVAL = int(os.environ.get("INTERVAL", "60"))
 
-send_tg() {
-  local text="$1"
-  curl -fsS -X POST "$API" \
-    -H 'Content-Type: application/json' \
-    -d "$(python3 - <<PY
-import json, os
-print(json.dumps({
-  'chat_id': os.environ.get('CHAT_ID', '$CHAT_ID'),
-  'text': '''$text''',
-  'parse_mode': 'HTML',
-  'disable_web_page_preview': True
-}, ensure_ascii=False))
+def sh(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=5).decode(errors="ignore").strip()
+    except Exception:
+        return ""
+
+def uptime_seconds():
+    try:
+        return int(float(open("/proc/uptime").read().split()[0]))
+    except Exception:
+        return 0
+
+def boot_time_text(up):
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - int(up)))
+    except Exception:
+        return ""
+
+def mem_percent():
+    try:
+        data = {}
+        for line in open("/proc/meminfo"):
+            k, v = line.split(":", 1)
+            data[k] = int(v.strip().split()[0])
+        total = data.get("MemTotal", 0)
+        avail = data.get("MemAvailable", 0)
+        return round((total - avail) * 100 / total, 1) if total else 0
+    except Exception:
+        return 0
+
+def disk_percent():
+    out = sh("df -P / | awk 'NR==2{gsub(/%/,\"\",$5);print $5}'")
+    try:
+        return float(out)
+    except Exception:
+        return 0
+
+def cpu_percent():
+    # 读取两次 /proc/stat 计算 CPU 使用率
+    def read():
+        parts = open("/proc/stat").readline().split()[1:]
+        vals = list(map(int, parts))
+        idle = vals[3] + vals[4]
+        total = sum(vals)
+        return idle, total
+    try:
+        i1, t1 = read()
+        time.sleep(0.2)
+        i2, t2 = read()
+        total = t2 - t1
+        idle = i2 - i1
+        return round((1 - idle / total) * 100, 1) if total else 0
+    except Exception:
+        return 0
+
+def net_bytes():
+    rx = tx = 0
+    try:
+        for line in open("/proc/net/dev").read().splitlines()[2:]:
+            iface, rest = line.split(":", 1)
+            iface = iface.strip()
+            if iface == "lo":
+                continue
+            vals = rest.split()
+            rx += int(vals[0])
+            tx += int(vals[8])
+    except Exception:
+        pass
+    return rx, tx
+
+def public_ip():
+    for url in ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:
+                return r.read().decode().strip().splitlines()[0]
+        except Exception:
+            pass
+    return ""
+
+def post_json(url, data):
+    raw = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(url, data=raw, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return r.read().decode(errors="ignore")
+
+def tg_send(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = json.dumps({"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=8).read()
+    except Exception:
+        pass
+
+def collect():
+    up = uptime_seconds()
+    rx, tx = net_bytes()
+    return {
+        "secret": SECRET,
+        "server_id": SID,
+        "name": NAME,
+        "hostname": socket.gethostname(),
+        "public_ip": public_ip(),
+        "uptime_seconds": up,
+        "boot_time": boot_time_text(up),
+        "cpu_percent": cpu_percent(),
+        "mem_percent": mem_percent(),
+        "disk_percent": disk_percent(),
+        "rx_bytes": rx,
+        "tx_bytes": tx,
+        "ts": int(time.time()),
+    }
+
+def main():
+    tg_send(f"✅📡 <b>探针已启动</b>\n\n🖥️ {NAME}\n🆔 ID：{SID}\n🌐 上报地址：<code>{URL}</code>")
+    while True:
+        try:
+            data = collect()
+            post_json(URL, data)
+            print("report ok", time.strftime("%F %T"), data.get("uptime_seconds"), flush=True)
+        except Exception as e:
+            print("report failed", e, flush=True)
+        time.sleep(INTERVAL)
+
+if __name__ == "__main__":
+    main()
 PY
-)" >/dev/null 2>&1 || true
-}
 
-fmt_os() {
-  if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    echo "${PRETTY_NAME:-${NAME:-Linux}}"
-  else
-    uname -srm
-  fi
-}
+chmod +x "$APP_DIR/agent.py"
 
-public_ip() {
-  curl -4 -s --max-time 6 https://api.ipify.org || curl -4 -s --max-time 6 https://icanhazip.com || echo "未知"
-}
-
-mem_percent() {
-  free | awk '/Mem:/ {printf("%.0f", $3/$2*100)}'
-}
-
-disk_percent() {
-  df -P / | awk 'NR==2 {gsub("%","",$5); print $5}'
-}
-
-load_percent() {
-  cores=$(nproc 2>/dev/null || echo 1)
-  load=$(awk '{print $1}' /proc/loadavg)
-  awk -v l="$load" -v c="$cores" 'BEGIN{printf("%.0f", (l/c)*100)}'
-}
-
-state_get() { [ -f "$STATE_DIR/$1" ] && cat "$STATE_DIR/$1" || echo "0"; }
-state_set() { echo "$2" > "$STATE_DIR/$1"; }
-
-startup_msg="✅🟢 <b>探针已上线</b> 🟢✅
-
-━━━━━━━━━━━━━━
-🖥️ <b>名称：</b>${NODE_NAME}
-🌍 <b>公网 IP：</b><code>$(public_ip)</code>
-🧬 <b>系统：</b>$(fmt_os)
-⏱️ <b>检测间隔：</b>${INTERVAL} 秒
-━━━━━━━━━━━━━━
-📌 Agent 会在 CPU/内存/磁盘异常时推送告警，恢复正常时推送恢复通知。"
-send_tg "$startup_msg"
-
-while true; do
-  MEM=$(mem_percent || echo 0)
-  DISK=$(disk_percent || echo 0)
-  LOAD=$(load_percent || echo 0)
-  NOW=$(date '+%Y-%m-%d %H:%M:%S')
-
-  if [ "$DISK" -ge "$DISK_ALERT" ]; then
-    if [ "$(state_get disk)" != "1" ]; then
-      state_set disk 1
-      send_tg "🚨💽 <b>磁盘空间告警</b> 💽🚨
-
-🖥️ <b>名称：</b>${NODE_NAME}
-📊 <b>根目录使用率：</b>${DISK}%
-⏰ <b>时间：</b>${NOW}
-
-🧹 建议清理日志、缓存或大文件。"
-    fi
-  else
-    if [ "$(state_get disk)" = "1" ]; then
-      state_set disk 0
-      send_tg "✅💽 <b>磁盘空间已恢复</b>
-
-🖥️ <b>名称：</b>${NODE_NAME}
-📊 <b>根目录使用率：</b>${DISK}%
-⏰ <b>时间：</b>${NOW}"
-    fi
-  fi
-
-  if [ "$MEM" -ge "$MEM_ALERT" ]; then
-    if [ "$(state_get mem)" != "1" ]; then
-      state_set mem 1
-      send_tg "🚨🧠 <b>内存高占用告警</b> 🧠🚨
-
-🖥️ <b>名称：</b>${NODE_NAME}
-📊 <b>内存使用率：</b>${MEM}%
-⏰ <b>时间：</b>${NOW}"
-    fi
-  else
-    if [ "$(state_get mem)" = "1" ]; then
-      state_set mem 0
-      send_tg "✅🧠 <b>内存已恢复</b>
-
-🖥️ <b>名称：</b>${NODE_NAME}
-📊 <b>内存使用率：</b>${MEM}%
-⏰ <b>时间：</b>${NOW}"
-    fi
-  fi
-
-  if [ "$LOAD" -ge "$CPU_LOAD_ALERT" ]; then
-    if [ "$(state_get load)" != "1" ]; then
-      state_set load 1
-      send_tg "🚨🔥 <b>CPU/负载告警</b> 🔥🚨
-
-🖥️ <b>名称：</b>${NODE_NAME}
-📊 <b>估算负载：</b>${LOAD}%
-⏰ <b>时间：</b>${NOW}"
-    fi
-  else
-    if [ "$(state_get load)" = "1" ]; then
-      state_set load 0
-      send_tg "✅🔥 <b>CPU/负载已恢复</b>
-
-🖥️ <b>名称：</b>${NODE_NAME}
-📊 <b>估算负载：</b>${LOAD}%
-⏰ <b>时间：</b>${NOW}"
-    fi
-  fi
-
-  sleep "$INTERVAL"
-done
-EOF
-chmod +x "$WORKER"
-
-cat > "$SERVICE_FILE" <<EOF
+cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=Server Monitor Telegram Agent
+Description=Server Monitor Agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$APP_DIR
-EnvironmentFile=$ENV_FILE
-ExecStart=$WORKER
+Environment="AGENT_URL=$URL"
+Environment="AGENT_SECRET=$SECRET"
+Environment="SERVER_ID=$SID"
+Environment="SERVER_NAME=$NAME"
+Environment="BOT_TOKEN=$BOT_TOKEN"
+Environment="CHAT_ID=$CHAT_ID"
+Environment="INTERVAL=$INTERVAL"
+ExecStart=/usr/bin/python3 $APP_DIR/agent.py
 Restart=always
 RestartSec=5
 
@@ -217,6 +207,6 @@ systemctl daemon-reload
 systemctl enable --now "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
-echo "✅ 探针安装完成"
+echo "✅ 探针安装/更新完成"
 echo "📌 查看状态：systemctl status $SERVICE_NAME --no-pager -l"
 echo "📌 查看日志：journalctl -u $SERVICE_NAME -f"
