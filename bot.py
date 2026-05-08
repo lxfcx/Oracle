@@ -3783,6 +3783,211 @@ def handle(chat_id, text):
 
 
 
+
+
+# ============================================================
+# FINAL ONLINE DURATION PATCH
+# 新增：本机 + 所有远程服务器在线时长/离线时长显示。
+# 不修改原来的监控、提醒、探针、编辑按钮逻辑。
+# ============================================================
+
+def duration_from_seconds(seconds):
+    try:
+        seconds = int(max(0, float(seconds)))
+    except Exception:
+        return "未知"
+    days = seconds // 86400
+    hours = seconds % 86400 // 3600
+    minutes = seconds % 3600 // 60
+    if days > 0:
+        return f"{days} 天 {hours} 小时 {minutes} 分钟"
+    if hours > 0:
+        return f"{hours} 小时 {minutes} 分钟"
+    return f"{minutes} 分钟"
+
+
+def duration_since_text(dt_text):
+    if not dt_text:
+        return "未知"
+    try:
+        start = parse_date(str(dt_text))
+        return duration_from_seconds((datetime.now() - start).total_seconds())
+    except Exception:
+        return "未知"
+
+
+def local_online_duration_text():
+    """本机在线时长，使用系统启动时间计算。"""
+    try:
+        return duration_from_seconds(time.time() - psutil.boot_time())
+    except Exception:
+        return uptime_text()
+
+
+def get_server_status_row(sid):
+    try:
+        conn = db()
+        row = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+        conn.close()
+        return row
+    except Exception:
+        return None
+
+
+def server_online_duration_text(r, online=None):
+    """
+    远程服务器在线/离线时长：
+    - 在线：从 server_status.last_changed_at 计算在线时长
+    - 离线：从 server_status.last_changed_at 计算离线时长
+    - 没有历史记录时显示“刚刚记录”
+    """
+    try:
+        sid = r["id"]
+        if online is None:
+            online = check_tcp(r["host"], r["check_port"], timeout=3)
+
+        st = get_server_status_row(sid)
+        if not st:
+            return "刚刚记录" if online else "未知"
+
+        status = (st["last_status"] or "").strip()
+        changed = st["last_changed_at"] or st["last_checked_at"] or ""
+
+        # 如果当前实时检测和数据库状态不一致，以当前检测状态为准，但时长显示为“等待确认”
+        if online and status != "online":
+            return "等待确认"
+        if (not online) and status != "offline":
+            return "等待确认"
+
+        return duration_since_text(changed)
+    except Exception:
+        return "未知"
+
+
+# 覆盖本机状态块：增加在线时长。
+def status_block():
+    s = get_local_status()
+    local_place = " ".join(x for x in [s.get("country"), s.get("region"), s.get("city")] if x and x != "未知")
+    return (
+        "🖥️ <b>本机状态</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🌐 主机名称：<code>{h(s['hostname'])}</code>\n"
+        f"🌍 公网 IP：<code>{h(s.get('public_ip', '未知'))}</code>\n"
+        f"📍 国家地区：{h(s.get('flag', '🌐'))} {h(local_place or s.get('country') or '未知')}\n"
+        f"🏢 运营商：{h(s.get('isp') or '未知')}\n"
+        f"🧬 系统版本：{h(s['os'])}\n"
+        f"{local_profile_lines()}\n"
+        f"🟢 在线时长：{h(local_online_duration_text())}\n"
+        f"⏱️ 运行时间：{h(s['uptime'])}\n"
+        f"📊 CPU 使用率：{s['cpu']:.0f}%\n"
+        f"⚙️ 系统负载：{s['load1']:.2f} / {s['load5']:.2f} / {s['load15']:.2f}\n"
+        f"🧩 CPU 核心：{s['cpu_count']} 核\n"
+        f"🧠 内存使用：{fmt_size(s['mem_used'])} / {fmt_size(s['mem_total'])} ({s['mem_percent']:.0f}%)\n"
+        f"💾 磁盘使用：{fmt_size(s['disk_used'])} / {fmt_size(s['disk_total'])} ({s['disk_percent']:.0f}%)"
+    )
+
+
+# 覆盖本机列表行：按钮上也显示在线时长。
+def compact_local_row():
+    s = get_local_status()
+    p = get_local_profile()
+    name = one_line(p.get("name"), socket.gethostname())
+    place = " ".join(x for x in [s.get("country"), s.get("region"), s.get("city")] if x and x != "未知")
+    online_time = local_online_duration_text()
+    return {
+        "id": "local",
+        "name": name,
+        "label": f"🟢 {s.get('flag','🌐')} 🏠 本机｜{name}｜在线 {online_time}",
+        "short": f"🟢 本机｜{name}｜在线 {online_time}｜{s.get('flag','🌐')} {place or s.get('country','未知')}",
+    }
+
+
+# 覆盖服务器按钮行：每台远程服务器都显示在线/离线时长。
+def server_button_label(r):
+    online = check_tcp(r["host"], r["check_port"], timeout=3)
+    status = "🟢" if online else "🔴"
+    state = "在线" if online else "离线"
+    flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+    days = expire_status_text(r["expire_at"], is_free_forever_row(r))
+    free = "🎁" if is_free_forever_row(r) else ""
+    auto = "🔁" if is_auto_renew_row(r) else ""
+    duration = server_online_duration_text(r, online)
+    return f"{status} {flag}{free}{auto} ID{r['id']}｜{r['name']}｜{state} {duration}｜{days}"
+
+
+# 覆盖远程服务器详情：增加在线/离线时长。
+def remote_detail_text(r):
+    online = check_tcp(r["host"], r["check_port"], timeout=3)
+    status_text = "🟢 在线" if online else "🔴 离线"
+    duration_label = "🟢 在线时长" if online else "🔴 离线时长"
+    duration = server_online_duration_text(r, online)
+    free = is_free_forever_row(r)
+    auto = is_auto_renew_row(r)
+    return (
+        "🖥️✨ <b>服务器详情</b> ✨🖥️\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📡 状态：{status_text}\n"
+        f"{duration_label}：{h(duration)}\n"
+        f"🆔 ID：<code>{r['id']}</code>\n"
+        f"🖥️ 名称：{h(r['name'])}\n"
+        f"🌐 主机：<code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📍 地区：{server_location_line(r)}\n"
+        f"🏢 运营商：{h(r['isp'] if 'isp' in r.keys() and r['isp'] else '未知')}\n"
+        f"🧬 系统：{h(r['os_name'] if 'os_name' in r.keys() and r['os_name'] else '未知系统')}\n"
+        f"📝 备注：{h(r['note'] or '无')}\n"
+        f"🎁 永久免费：{bool_text(free)}\n"
+        f"🔁 自动续费：{bool_text(auto)}\n"
+        f"💰 价格：{server_price_line(r)}\n"
+        f"📆 到期：{h(r['expire_at'] if r['expire_at'] else '未设置')}｜{expire_status_text(r['expire_at'], free)}\n"
+        "━━━━━━━━━━━━━━\n"
+        "👇 <b>下一步：</b>查看该服务器流量/磁盘/事件，或编辑续费。"
+    )[:3900]
+
+
+# 覆盖服务器概览块：总览里也显示远程服务器在线/离线时长。
+def servers_summary_block():
+    refresh_missing_meta()
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+    conn.close()
+    if not rows:
+        return "📡 <b>服务器在线情况</b>\n━━━━━━━━━━━━━━\n📭 暂无服务器记录。\n发送 <code>添加服务器</code> 开始添加。"
+    online_count = 0
+    offline_count = 0
+    lines = []
+    for r in rows:
+        online = check_tcp(r["host"], r["check_port"], timeout=3)
+        duration = server_online_duration_text(r, online)
+        if online:
+            online_count += 1
+            status = "🟢 在线"
+            duration_label = f"在线 {duration}"
+        else:
+            offline_count += 1
+            status = "🔴 离线"
+            duration_label = f"离线 {duration}"
+        flag = country_flag(r["country_code"] if "country_code" in r.keys() else "")
+        lines.append(f"{status}｜{flag} {h(r['name'])}｜{h(r['host'])}:{h(r['check_port'])}｜{h(duration_label)}")
+    return (
+        "📡 <b>服务器在线情况</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🟢 在线：{online_count} 台\n"
+        f"🔴 离线：{offline_count} 台\n"
+        f"📦 总数：{len(rows)} 台\n\n" + "\n".join(lines[:12])
+    )
+
+
+# 覆盖本机详情：明确显示本机在线时长。
+def local_detail_text():
+    return (
+        "🏠✨ <b>本机详细信息</b> ✨🏠\n"
+        f"🕒 更新时间：{now_text()}\n\n"
+        f"{status_block()}\n\n"
+        "👇 <b>下一步：</b>可继续查看本机流量、磁盘、事件或编辑资料。"
+    )[:3900]
+
+
 if __name__ == "__main__":
     init_db()
     poll()
