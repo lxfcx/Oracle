@@ -3742,13 +3742,120 @@ def handle(chat_id, text):
     return _prev_handle_final(chat_id, text)
 
 
-# 确保 pending 表启动时创建。
-_old_init_db_final = init_db
+
+# ============================================================
+# SAFE FINAL init_db
+# 说明：
+# 旧版多次用同一个 _old_init_db_final 包装 init_db，会造成递归：
+# init_db -> _old_init_db_final -> init_db -> ...
+# 这里不再调用任何旧 init_db 包装，直接创建/升级所有需要的数据表。
+# ============================================================
 
 def init_db():
-    _old_init_db_final()
-    ensure_pending_table()
+    os.makedirs(APP_DIR, exist_ok=True)
+    conn = db()
 
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS servers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        host TEXT NOT NULL,
+        note TEXT DEFAULT '',
+        cycle TEXT DEFAULT 'monthly',
+        price REAL DEFAULT 0,
+        currency TEXT DEFAULT 'USD',
+        expire_at TEXT NOT NULL,
+        check_port INTEGER DEFAULT 22,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    for col, definition in [
+        ("country", "TEXT DEFAULT ''"),
+        ("country_code", "TEXT DEFAULT ''"),
+        ("region", "TEXT DEFAULT ''"),
+        ("city", "TEXT DEFAULT ''"),
+        ("isp", "TEXT DEFAULT ''"),
+        ("os_name", "TEXT DEFAULT ''"),
+        ("last_meta_at", "TEXT DEFAULT ''"),
+        ("free_forever", "INTEGER DEFAULT 0"),
+        ("auto_renew", "INTEGER DEFAULT 0"),
+    ]:
+        ensure_column(conn, "servers", col, definition)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS reminders (
+        server_id INTEGER,
+        remind_key TEXT,
+        sent_at TEXT,
+        PRIMARY KEY(server_id, remind_key)
+    )
+    """)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS server_status (
+        server_id INTEGER PRIMARY KEY,
+        last_status TEXT DEFAULT 'unknown',
+        last_checked_at TEXT,
+        last_changed_at TEXT
+    )
+    """)
+
+    for col, definition in [
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("success_count", "INTEGER DEFAULT 0"),
+        ("notified_offline", "INTEGER DEFAULT 0"),
+        ("first_fail_at", "TEXT DEFAULT ''"),
+        ("first_recover_at", "TEXT DEFAULT ''"),
+    ]:
+        ensure_column(conn, "server_status", col, definition)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS alerts (
+        alert_key TEXT PRIMARY KEY,
+        sent_at TEXT
+    )
+    """)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT DEFAULT '',
+        title TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS local_profile (
+        key TEXT PRIMARY KEY,
+        value TEXT DEFAULT ''
+    )
+    """)
+
+    for k, v in {
+        "name": socket.gethostname(),
+        "note": "",
+        "cycle": "monthly",
+        "price": "0",
+        "currency": "USD",
+        "expire_at": "",
+    }.items():
+        conn.execute("INSERT OR IGNORE INTO local_profile(key, value) VALUES(?,?)", (k, v))
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS pending_actions (
+        chat_id TEXT PRIMARY KEY,
+        target_type TEXT DEFAULT '',
+        target_id TEXT DEFAULT '',
+        field TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    conn.commit()
+    conn.close()
 
 
 if __name__ == "__main__":
