@@ -5155,6 +5155,367 @@ def init_db():
     ensure_metrics_hardware_columns()
 
 
+
+
+# ============================================================
+# FINAL SERVER HOST/IP EDIT + ID REUSE PATCH
+# 修正：
+# 1) 新增服务器 IP / 主机编辑功能；
+# 2) 删除最大 ID 后再次添加，不再跳号，例如删除 ID6 后再添加仍是 ID6；
+# 3) 修改 IP 后自动刷新地区/运营商、重新检测状态、清理旧探针缓存。
+# ============================================================
+
+def reset_server_id_sequence():
+    """让 AUTOINCREMENT 继续从当前最大 ID 后面开始，避免删除最大 ID 后跳号。"""
+    try:
+        conn = db()
+        max_id = conn.execute("SELECT COALESCE(MAX(id), 0) AS max_id FROM servers").fetchone()["max_id"]
+        # sqlite_sequence 只有 AUTOINCREMENT 表产生过数据后才存在；失败也不影响主流程。
+        try:
+            conn.execute("UPDATE sqlite_sequence SET seq=? WHERE name='servers'", (int(max_id),))
+            if conn.total_changes == 0:
+                conn.execute("INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES('servers', ?)", (int(max_id),))
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def validate_host_value(value):
+    value = one_line(value, "").strip()
+    if not value:
+        raise ValueError("IP / 主机不能为空")
+    if len(value) > 253:
+        raise ValueError("IP / 主机太长")
+    if value.startswith("http://") or value.startswith("https://"):
+        raise ValueError("这里只填写 IP 或域名，不要带 http:// 或 https://")
+    if "/" in value or " " in value:
+        raise ValueError("IP / 主机格式不正确")
+    # 当前 check_tcp 使用 IPv4 socket，避免误填 host:port 或 IPv6 导致检测异常。
+    if ":" in value:
+        raise ValueError("不要在主机里带端口；端口请用“编辑端口”。暂不建议在这里填写 IPv6。")
+    return value
+
+
+def refresh_server_meta_after_host_change(sid, host):
+    conn = db()
+    row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return None, False
+
+    meta = detect_server_meta(host)
+    online = check_tcp(host, row["check_port"], timeout=5)
+    status = "online" if online else "offline"
+
+    conn.execute(
+        "UPDATE servers SET country=?, country_code=?, region=?, city=?, isp=?, last_meta_at=? WHERE id=?",
+        (meta["country"], meta["country_code"], meta["region"], meta["city"], meta["isp"], now_text(), sid)
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO server_status(server_id,last_status,last_checked_at,last_changed_at) VALUES(?,?,?,?)",
+        (sid, status, now_text(), now_text())
+    )
+    # IP 换了以后，旧探针数据可能属于旧机器，清理掉避免误显示。
+    try:
+        conn.execute("DELETE FROM server_metrics WHERE server_id=?", (sid,))
+    except Exception:
+        pass
+    conn.commit()
+    row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    conn.close()
+    return row, online
+
+
+def update_server_host(sid, value):
+    host = validate_host_value(value)
+    conn = db()
+    row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("没有找到这个服务器 ID")
+    old_host = row["host"]
+    conn.execute("UPDATE servers SET host=? WHERE id=?", (host, sid))
+    conn.commit()
+    conn.close()
+
+    new_row, online = refresh_server_meta_after_host_change(sid, host)
+    event_add("action", "编辑服务器IP", f"服务器 ID {sid} 主机已从 {old_host} 修改为 {host}")
+    return new_row or get_server_row(sid), old_host, host, online
+
+
+# 覆盖字段名称/示例，增加 IP/主机字段。
+def field_cn(field):
+    return {
+        "host": "IP / 主机",
+        "ip": "IP / 主机",
+        "price": "付费价格",
+        "expire_at": "到期时间",
+        "cycle": "付费周期",
+        "note": "备注",
+        "check_port": "检测端口",
+        "os_name": "系统",
+        "name": "名称",
+        "opened_at": "开通时间",
+        "free_forever": "永久免费",
+        "auto_renew": "自动续费",
+    }.get(field, field)
+
+
+def field_example(field):
+    return {
+        "host": "1.2.3.4  或  example.com",
+        "ip": "1.2.3.4  或  example.com",
+        "price": "50 CNY  或  6 USD",
+        "expire_at": "2027-05-01",
+        "opened_at": "2026-05-01 10:00:00  或  2026-05-01",
+        "cycle": "月付 / 季付 / 年付",
+        "note": "香港甲骨文主力机",
+        "check_port": "22  或  443",
+        "os_name": "Ubuntu 22.04",
+        "name": "HK-Oracle",
+        "free_forever": "是 / 否",
+        "auto_renew": "是 / 否",
+    }.get(field, "请输入新内容")
+
+
+# 覆盖服务器编辑菜单，加入编辑 IP/主机。
+def edit_server_field_keyboard(sid):
+    return [
+        [
+            {"text": "🌐 编辑IP/主机", "callback_data": f"field:server:{sid}:host"},
+        ],
+        [
+            {"text": "💰 编辑价格", "callback_data": f"field:server:{sid}:price"},
+            {"text": "📆 编辑到期", "callback_data": f"field:server:{sid}:expire_at"},
+        ],
+        [
+            {"text": "🔁 编辑周期", "callback_data": f"field:server:{sid}:cycle"},
+            {"text": "📝 编辑备注", "callback_data": f"field:server:{sid}:note"},
+        ],
+        [
+            {"text": "🔌 编辑端口", "callback_data": f"field:server:{sid}:check_port"},
+            {"text": "🧬 编辑系统", "callback_data": f"field:server:{sid}:os_name"},
+        ],
+        [
+            {"text": "🏷️ 编辑名称", "callback_data": f"field:server:{sid}:name"},
+        ],
+        [
+            {"text": "🎁 永久免费", "callback_data": f"field:server:{sid}:free_forever"},
+            {"text": "🔁 自动续费", "callback_data": f"field:server:{sid}:auto_renew"},
+        ],
+        [{"text": "⬅️ 上一步：服务器详情", "callback_data": f"target:server:{sid}"}],
+        [
+            {"text": "📋 返回列表", "callback_data": "nav:servers"},
+            {"text": "📊 返回总览", "callback_data": "nav:dashboard"},
+            {"text": "🛠️ 工具", "callback_data": "nav:tools"},
+        ],
+    ]
+
+
+# 覆盖服务器详情按钮，直接显示编辑 IP/主机入口。
+def remote_detail_keyboard(sid):
+    return bottom_nav([
+        [
+            {"text": "🌐 流量", "callback_data": f"view:traffic:server:{sid}"},
+            {"text": "💾 磁盘", "callback_data": f"view:disk:server:{sid}"},
+            {"text": "🧾 事件", "callback_data": f"view:events:server:{sid}"},
+        ],
+        [
+            {"text": "✏️ 编辑", "callback_data": f"edit:server:{sid}"},
+            {"text": "🌐 改IP/主机", "callback_data": f"field:server:{sid}:host"},
+            {"text": "📡 探针", "callback_data": f"agent_cmd:{sid}"},
+        ],
+        [
+            {"text": "⏰ 续费", "callback_data": f"server_renew_help:{sid}"},
+            {"text": "🌍 刷新地区", "callback_data": f"refresh_meta:{sid}"},
+            {"text": "🗑️ 删除服务器", "callback_data": f"delete_confirm:{sid}"},
+        ],
+        [
+            {"text": "💰 价格", "callback_data": f"field:server:{sid}:price"},
+            {"text": "📆 到期", "callback_data": f"field:server:{sid}:expire_at"},
+            {"text": "🔁 周期", "callback_data": f"field:server:{sid}:cycle"},
+        ],
+        [
+            {"text": "📝 备注", "callback_data": f"field:server:{sid}:note"},
+            {"text": "🔌 端口", "callback_data": f"field:server:{sid}:check_port"},
+            {"text": "🧬 系统", "callback_data": f"field:server:{sid}:os_name"},
+        ],
+        [
+            {"text": "🏷️ 名称", "callback_data": f"field:server:{sid}:name"},
+            {"text": "🎁 永久免费", "callback_data": f"field:server:{sid}:free_forever"},
+            {"text": "🔁 自动续费", "callback_data": f"field:server:{sid}:auto_renew"},
+        ],
+        [
+            {"text": "📆 +1月", "callback_data": f"renew_month:{sid}"},
+            {"text": "🗓️ +3月", "callback_data": f"renew_quarter:{sid}"},
+            {"text": "📅 +1年", "callback_data": f"renew_year:{sid}"},
+        ],
+    ])
+
+
+# 包装字段更新函数，只新增 host/ip，其它字段继续走原逻辑。
+_prev_update_server_field_host_patch = update_server_field
+
+def update_server_field(sid, field, value):
+    if field in ["host", "ip"]:
+        row, old_host, new_host, online = update_server_host(sid, value)
+        return row
+    return _prev_update_server_field_host_patch(sid, field, value)
+
+
+# 包装 pending 输入，给改 IP 成功后补充重新部署探针提醒。
+_prev_process_pending_input_host_patch = process_pending_input
+
+def process_pending_input(chat_id, text):
+    row = get_pending_action(chat_id)
+    if row and row["target_type"] == "server" and row["field"] in ["host", "ip"]:
+        sid = row["target_id"]
+        try:
+            new_row, old_host, new_host, online = update_server_host(sid, text)
+            clear_pending_action(chat_id)
+            status_text = "🟢 在线" if online else "🔴 离线"
+            send_inline(
+                chat_id,
+                "✅🌐 <b>服务器 IP / 主机已更新</b>\n\n"
+                f"🆔 ID：<code>{h(sid)}</code>\n"
+                f"旧主机：<code>{h(old_host)}</code>\n"
+                f"新主机：<code>{h(new_host)}</code>\n"
+                f"当前检测：{status_text}\n\n"
+                "📌 已自动刷新国家地区/运营商。\n"
+                "📌 已清理旧探针缓存。\n"
+                "📌 如果这台是新机器，请重新点击 <b>📡 探针</b> 部署新版探针。\n\n"
+                f"{remote_detail_text(new_row)}",
+                remote_detail_keyboard(sid)
+            )
+            return True
+        except Exception as e:
+            send_inline(
+                chat_id,
+                f"❌ <b>编辑失败：</b>{h(e)}\n\n请重新发送正确 IP / 主机，或发送 <code>取消</code> 退出编辑。\n\n示例：<code>1.2.3.4</code>",
+                edit_nav_keyboard("server", sid)
+            )
+            return True
+    return _prev_process_pending_input_host_patch(chat_id, text)
+
+
+def update_host_command(chat_id, sid, value):
+    try:
+        new_row, old_host, new_host, online = update_server_host(sid, value)
+        status_text = "🟢 在线" if online else "🔴 离线"
+        send_inline(
+            chat_id,
+            "✅🌐 <b>服务器 IP / 主机已更新</b>\n\n"
+            f"🆔 ID：<code>{h(sid)}</code>\n"
+            f"旧主机：<code>{h(old_host)}</code>\n"
+            f"新主机：<code>{h(new_host)}</code>\n"
+            f"当前检测：{status_text}\n\n"
+            "📌 已自动刷新国家地区/运营商。\n"
+            "📌 已清理旧探针缓存。\n"
+            "📌 如果这台是新机器，请重新点击 <b>📡 探针</b> 部署新版探针。\n\n"
+            f"{remote_detail_text(new_row)}",
+            remote_detail_keyboard(sid)
+        )
+    except Exception as e:
+        send(chat_id, f"❌ 编辑服务器 IP / 主机失败：{h(e)}\n\n示例：<code>编辑IP {h(sid)} 1.2.3.4</code>")
+
+
+# 包装删除函数：删除后重置 ID 序列。
+_prev_delete_server_by_id_host_patch = delete_server_by_id
+
+def delete_server_by_id(sid):
+    r = _prev_delete_server_by_id_host_patch(sid)
+    reset_server_id_sequence()
+    return r
+
+
+# 包装添加函数：添加前重置序列，解决删除最大 ID 后再添加跳号。
+_prev_cmd_add_server_host_patch = cmd_add_server
+
+def cmd_add_server(chat_id, text):
+    reset_server_id_sequence()
+    return _prev_cmd_add_server_host_patch(chat_id, text)
+
+
+# 最后层 callback，优先接管删除，确保所有按钮删除后都会重置 ID 序列。
+_prev_handle_callback_host_patch = handle_callback
+
+def handle_callback(callback):
+    try:
+        callback_id = callback.get("id")
+        data = callback.get("data") or ""
+        msg = callback.get("message") or {}
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if data.startswith("delete_do:"):
+            if not is_admin(chat_id):
+                answer_callback(callback_id, "未授权")
+                return
+            sid = data.split(":", 1)[1]
+            r = delete_server_by_id(sid)
+            answer_callback(callback_id, "已删除" if r else "不存在")
+            if not r:
+                edit_inline_message(chat_id, message_id, "❌ 服务器不存在或已经被删除。", bottom_nav())
+                return
+            edit_inline_message(
+                chat_id,
+                message_id,
+                "✅🗑️ <b>服务器已删除</b>\n\n"
+                f"🆔 ID：<code>{h(sid)}</code>\n"
+                f"🖥️ 名称：{h(r['name'])}\n"
+                f"🌐 主机：<code>{h(r['host'])}</code>\n\n"
+                "已清理该服务器的状态和提醒记录。\n"
+                "📌 编号已重置：如果这是最大 ID，下一台新服务器会继续使用这个编号。",
+                bottom_nav([[{"text": "📋 继续查看列表", "callback_data": "nav:servers"}]])
+            )
+            return
+    except Exception as e:
+        try:
+            send(callback.get("message", {}).get("chat", {}).get("id"), f"❌ 删除/按钮操作失败：{h(e)}", keyboard=False)
+        except Exception:
+            pass
+        return
+
+    return _prev_handle_callback_host_patch(callback)
+
+
+# 最后层文字命令，支持编辑IP/主机，并兼容批量编辑。
+_prev_handle_host_patch = handle
+
+def handle(chat_id, text):
+    ct = clean_command_text(text)
+
+    m = re.match(r"^(编辑IP|编辑ip|编辑主机|编辑地址|修改IP|修改ip|修改主机|修改地址)\s+(\d+)\s+(.+)$", ct)
+    if m:
+        update_host_command(chat_id, m.group(2), m.group(3).strip())
+        return
+
+    # 兼容批量粘贴里包含编辑IP。
+    if "\n" in str(text or ""):
+        lines = split_command_lines(text)
+        if lines and all(line.startswith(("编辑IP", "编辑ip", "编辑主机", "编辑地址", "修改IP", "修改ip", "修改主机", "修改地址", LOCAL_EDIT_PREFIXES, SERVER_EDIT_PREFIXES)) for line in lines):
+            for line in lines:
+                mm = re.match(r"^(编辑IP|编辑ip|编辑主机|编辑地址|修改IP|修改ip|修改主机|修改地址)\s+(\d+)\s+(.+)$", line)
+                if mm:
+                    update_host_command(chat_id, mm.group(2), mm.group(3).strip())
+                else:
+                    _prev_handle_host_patch(chat_id, line)
+            return
+
+    return _prev_handle_host_patch(chat_id, text)
+
+
+# 启动时顺手校正一次序列。
+_old_init_db_host_patch = init_db
+
+def init_db():
+    _old_init_db_host_patch()
+    reset_server_id_sequence()
+
+
 if __name__ == "__main__":
     init_db()
     poll()
