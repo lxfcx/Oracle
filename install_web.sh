@@ -8,7 +8,7 @@ WEB_ENV="${APP_DIR}/.env.web"
 WEB_VENV="${APP_DIR}/web-venv"
 WEB_FILE="${APP_DIR}/web_dashboard.py"
 if [ "$(id -u)" -ne 0 ]; then echo "❌ 请使用 root 执行，或前面加 sudo"; exit 1; fi
-banner(){ echo; echo "🌐✨ Telegram Server Monitor Web 面板 ✨🌐"; echo "━━━━━━━━━━━━━━━━━━━━"; }
+banner(){ echo; echo "🌐✨ Telegram Server Monitor Web 星空磨砂玻璃面板 ✨🌐"; echo "━━━━━━━━━━━━━━━━━━━━"; }
 install_or_update(){
   banner; echo "🚀 开始安装 / 更新 Web 面板..."
   apt update
@@ -25,8 +25,8 @@ install_or_update(){
     read -r -p "请输入网页登录账号 [admin]：" WEB_USERNAME
     WEB_USERNAME="${WEB_USERNAME:-admin}"
     while true; do
-      read -r -s -p "请输入网页登录密码：" WEB_PASSWORD; echo
-      read -r -s -p "请再次输入密码：" WEB_PASSWORD2; echo
+      read -r -p "请输入网页登录密码（明文显示，方便确认）：" WEB_PASSWORD
+      read -r -p "请再次输入密码（明文显示，方便确认）：" WEB_PASSWORD2
       [ "$WEB_PASSWORD" = "$WEB_PASSWORD2" ] && [ -n "$WEB_PASSWORD" ] && break
       echo "❌ 两次密码不一致或为空，请重新输入"
     done
@@ -77,7 +77,12 @@ reset_password(){
   [ -x "$WEB_VENV/bin/python" ] || { echo "⚠️ Web 环境不存在，先安装。"; install_or_update; return; }
   read -r -p "请输入新的网页登录账号 [admin]：" WEB_USERNAME
   WEB_USERNAME="${WEB_USERNAME:-admin}"
-  while true; do read -r -s -p "请输入新的网页登录密码：" WEB_PASSWORD; echo; read -r -s -p "请再次输入密码：" WEB_PASSWORD2; echo; [ "$WEB_PASSWORD" = "$WEB_PASSWORD2" ] && [ -n "$WEB_PASSWORD" ] && break; echo "❌ 两次密码不一致或为空"; done
+  while true; do
+    read -r -p "请输入新的网页登录密码（明文显示，方便确认）：" WEB_PASSWORD
+    read -r -p "请再次输入密码（明文显示，方便确认）：" WEB_PASSWORD2
+    [ "$WEB_PASSWORD" = "$WEB_PASSWORD2" ] && [ -n "$WEB_PASSWORD" ] && break
+    echo "❌ 两次密码不一致或为空"
+  done
   WEB_PASSWORD_HASH="$("$WEB_VENV/bin/python" - <<PY
 from werkzeug.security import generate_password_hash
 print(generate_password_hash(${WEB_PASSWORD@Q}))
