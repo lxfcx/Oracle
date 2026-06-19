@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 
 import requests
-from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify, flash, make_response
+from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify, flash, make_response, send_file, send_from_directory, abort
 from werkzeug.security import check_password_hash
 try:
     from dateutil.parser import parse as parse_date
@@ -59,7 +59,7 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT DEFAULT '',title TEXT DEFAULT '',content TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
     c.execute("""CREATE TABLE IF NOT EXISTS reminders(server_id INTEGER,remind_key TEXT,sent_at TEXT,PRIMARY KEY(server_id,remind_key))""")
     c.execute("""CREATE TABLE IF NOT EXISTS local_profile(key TEXT PRIMARY KEY,value TEXT DEFAULT '')""")
-    for k,v in {'name':socket.gethostname(),'note':'','cycle':'monthly','price':'0','currency':'USD','expire_at':''}.items(): c.execute('INSERT OR IGNORE INTO local_profile(key,value) VALUES(?,?)',(k,v))
+    for k,v in {'name':socket.gethostname(),'note':'','cycle':'monthly','price':'0','currency':'USD','expire_at':'','site_name':'服务器监控','site_subtitle':'星空磨砂玻璃面板'}.items(): c.execute('INSERT OR IGNORE INTO local_profile(key,value) VALUES(?,?)',(k,v))
     c.commit(); c.close()
 
 def fmt(n):
@@ -157,6 +157,11 @@ def login_required(fn):
         if not session.get('ok'): return redirect(url_for('login',next=request.path))
         return fn(*a,**kw)
     return w
+
+@app.route('/site-meta')
+def site_meta():
+    return jsonify({'site_name':site_name() if 'site_name' in globals() else '服务器监控','site_subtitle':site_subtitle() if 'site_subtitle' in globals() else '星空磨砂玻璃面板','has_favicon':bool(favicon_exists()) if 'favicon_exists' in globals() else False})
+
 @app.route('/login',methods=['GET','POST'])
 def login():
     if request.method=='POST':
@@ -226,7 +231,7 @@ def agent_cmd(s):
     ip=public_ip() or '你的主控服务器公网IP'; name=str(s.get('name') or 'server').replace('"','').replace("'",'')
     return f'wget -qO- https://raw.githubusercontent.com/lxfcx/Oracle/main/agent.sh | bash -s -- --url "http://{ip}:{METRICS_PORT}/report" --secret "{METRICS_SECRET}" --sid "{s.get("id")}" --name "{name}"'
 
-def render(active,body,**ctx): init_db(); return render_template_string(BASE,active=active,body=render_template_string(body,**ctx),now=now(),username=session.get('username',WEB_USERNAME),theme_css=active_theme_css() if 'active_theme_css' in globals() else '')
+def render(active,body,**ctx): init_db(); return render_template_string(BASE,active=active,body=render_template_string(body,**ctx),now=now(),username=session.get('username',WEB_USERNAME),theme_css=active_theme_css() if 'active_theme_css' in globals() else '',site_name=site_name() if 'site_name' in globals() else '服务器监控',site_subtitle=site_subtitle() if 'site_subtitle' in globals() else '星空磨砂玻璃面板',has_favicon=bool(favicon_exists()) if 'favicon_exists' in globals() else False)
 @app.route('/')
 @login_required
 def dashboard(): return render('dashboard',DASH,data=summary(),local=local_status(),profile=lprof(),events=events(8))
@@ -378,7 +383,14 @@ def settings_page():
     if request.method=='POST':
         act=request.form.get('action','')
         try:
-            if act=='password':
+            if act=='site':
+                set_setting('site_name', request.form.get('site_name','').strip() or '服务器监控')
+                set_setting('site_subtitle', request.form.get('site_subtitle','').strip() or '星空磨砂玻璃面板')
+                flash('平台名字已保存，刷新页面后生效','success')
+            elif act=='favicon':
+                save_uploaded_favicon(request.files.get('favicon'))
+                flash('浏览器标签图标已上传，强制刷新后生效','success')
+            elif act=='password':
                 user=request.form.get('username','admin').strip() or 'admin'
                 p1=request.form.get('password',''); p2=request.form.get('password2','')
                 if not p1 or p1!=p2: raise ValueError('两次密码不一致或为空')
@@ -469,15 +481,74 @@ def progress_row(label, sid, key, value, limit=90):
     return f'''<div class="progressrow"><span>{html.escape(str(label))}</span><div class="progress"><div class="bar {cls}" data-{key}="{sid}" data-limit="{lim:g}" style="width:{v:g}%"></div></div><b data-{key}txt="{sid}">{v:.0f}%</b></div>'''
 # ===== END FINAL PATCH =====
 
-LOGIN='''<!doctype html><html><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>登录</title><style>
+
+# ===== SITE CUSTOM PATCH: title/favicon/theme transparency =====
+def get_setting(key, default=''):
+    try:
+        c=db()
+        try:
+            r=c.execute('SELECT value FROM local_profile WHERE key=?',(key,)).fetchone()
+            return (r['value'] if r else default) or default
+        finally:
+            c.close()
+    except Exception:
+        return default
+
+def set_setting(key, value):
+    c=db()
+    try:
+        c.execute('CREATE TABLE IF NOT EXISTS local_profile(key TEXT PRIMARY KEY,value TEXT DEFAULT "")')
+        c.execute('INSERT OR REPLACE INTO local_profile(key,value) VALUES(?,?)',(key, str(value or '')))
+        c.commit()
+    finally:
+        c.close()
+
+def site_name():
+    return get_setting('site_name','服务器监控')
+
+def site_subtitle():
+    return get_setting('site_subtitle','星空磨砂玻璃面板')
+
+def favicon_exists():
+    for fn in ['favicon.ico','favicon.png','favicon.jpg','favicon.jpeg','favicon.webp']:
+        p=os.path.join(APP_DIR,fn)
+        if os.path.exists(p):
+            return p
+    return ''
+
+@app.route('/favicon.ico')
+def favicon():
+    from flask import send_file, abort, make_response
+    p=favicon_exists()
+    if not p:
+        abort(404)
+    resp=make_response(send_file(p))
+    resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+    return resp
+
+def save_uploaded_favicon(fileobj):
+    if not fileobj or not fileobj.filename:
+        raise ValueError('请选择图标文件')
+    ext=fileobj.filename.rsplit('.',1)[-1].lower() if '.' in fileobj.filename else 'png'
+    if ext not in ['ico','png','jpg','jpeg','webp']:
+        raise ValueError('图标只支持 ico/png/jpg/webp')
+    for old in ['favicon.ico','favicon.png','favicon.jpg','favicon.jpeg','favicon.webp']:
+        try: os.remove(os.path.join(APP_DIR,old))
+        except Exception: pass
+    target=os.path.join(APP_DIR,'favicon.'+ext)
+    fileobj.save(target)
+    return target
+# ===== END SITE CUSTOM PATCH =====
+
+LOGIN='''<!doctype html><html><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>登录</title><link id="favLink" rel="icon" href="/favicon.ico?v=login"><style>
 :root{--text:#edf5ff;--muted:#9fb0c7;--line:#ffffff28;--glass:#ffffff16;--glass2:#ffffff28;--a:#6ee7ff;--b:#a78bfa;--shadow:#0008}
-body.light{--text:#0f172a;--muted:#475569;--line:#0f172a22;--glass:#ffffffe0;--glass2:#ffffffb8;--shadow:#64748b44}
-body.solid{--glass:#0f172add;--glass2:#0f172af0}body.light.solid{--glass:#ffffff;--glass2:#f8fafc}
+body.light{--text:#0f172a;--muted:#475569;--line:#0f172a22;--glass:#ffffff55;--glass2:#ffffff88;--shadow:#64748b44}
+body.solid{--glass:#1d2b3faa;--glass2:#263950cc}body.light.solid{--glass:#ffffff;--glass2:#f8fafc}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;overflow:hidden;background:#050914;transition:.3s}
 body:before{content:"";position:fixed;inset:0;z-index:-3;background-image:linear-gradient(rgba(0,0,0,.18),rgba(0,0,0,.35)),url('/theme-bg?v=login'),
 radial-gradient(1px 1px at 8% 12%,#fff,transparent),radial-gradient(2px 2px at 18% 80%,#dbeafe,transparent),radial-gradient(1px 1px at 29% 35%,#fff,transparent),radial-gradient(1.5px 1.5px at 42% 18%,#cffafe,transparent),radial-gradient(2px 2px at 55% 70%,#fff,transparent),radial-gradient(1px 1px at 72% 28%,#e0e7ff,transparent),radial-gradient(1.8px 1.8px at 86% 62%,#fff,transparent),radial-gradient(circle at 18% 18%,#1d4ed875,transparent 34%),radial-gradient(circle at 82% 4%,#7c3aed70,transparent 38%),linear-gradient(180deg,#07111f,#020617 72%);animation:twinkle 16s ease-in-out infinite}
 body:after{content:"";position:fixed;inset:-40%;z-index:-2;background:radial-gradient(circle,#ffffff12 0 1px,transparent 2px);background-size:82px 82px;animation:drift 65s linear infinite}
-body.light:before{background:radial-gradient(circle at 20% 12%,#93c5fd99,transparent 32%),radial-gradient(circle at 82% 0,#c4b5fd99,transparent 36%),linear-gradient(180deg,#eff6ff,#dbeafe 62%,#f8fafc)}body.light:after{background:radial-gradient(circle,#33415526 0 1px,transparent 2px);background-size:86px 86px}
+body.light:before{background-image:linear-gradient(rgba(255,255,255,.10),rgba(255,255,255,.18)),var(--custom-bg,none),radial-gradient(circle at 20% 12%,#93c5fd99,transparent 32%),radial-gradient(circle at 82% 0,#c4b5fd99,transparent 36%),linear-gradient(180deg,#eff6ff,#dbeafe 62%,#f8fafc);background-size:cover,cover,auto,auto,auto;background-position:center}body.light:after{background:radial-gradient(circle,#33415526 0 1px,transparent 2px);background-size:86px 86px}
 @keyframes twinkle{0%,100%{filter:brightness(1)}50%{filter:brightness(1.32)}}@keyframes drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(82px,82px,0)}}
 .card{position:relative;z-index:2;width:min(460px,92vw);padding:34px;border:1px solid var(--line);background:linear-gradient(180deg,var(--glass2),var(--glass));border-radius:32px;box-shadow:0 30px 100px var(--shadow);backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px)}
 h1{margin:0 0 8px;font-size:31px}.sub{color:var(--muted);margin-bottom:20px}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0 18px}.ctl{padding:10px 12px;border:1px solid var(--line);background:var(--glass);border-radius:15px;color:var(--text);font-weight:900;cursor:pointer}
@@ -486,18 +557,18 @@ input,.loginbtn{width:100%;padding:15px;border-radius:16px;margin:9px 0;border:1
 function apply(){let theme=localStorage.getItem('theme')||'dark', glass=localStorage.getItem('glass')||'glass';document.body.classList.toggle('light',theme==='light');document.body.classList.toggle('solid',glass==='solid');let a=document.getElementById('themeText'),b=document.getElementById('glassText');if(a)a.textContent=theme==='light'?'🌙 夜间星空':'☀️ 日间明亮';if(b)b.textContent=glass==='solid'?'🧊 透明玻璃':'⬛ 实色背景'}
 function toggleTheme(){localStorage.setItem('theme',(localStorage.getItem('theme')||'dark')==='dark'?'light':'dark');apply()}
 function toggleGlass(){localStorage.setItem('glass',(localStorage.getItem('glass')||'glass')==='glass'?'solid':'glass');apply()}
-document.addEventListener('DOMContentLoaded',apply)
-</script></head><body><script>let __bgv=Date.now();document.body.style.setProperty('--custom-bg',"url('/theme-bg?v="+__bgv+"')");fetch('/theme-bg?v='+__bgv,{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg','login-bg')}).catch(()=>{});</script><form class=card method=post><h1>🛡️✨ Web 面板登录</h1><div class=sub>服务器监控 星空磨砂玻璃控制台</div><div class=controls><button type=button class=ctl onclick=toggleTheme()><span id=themeText>☀️ 日间明亮</span></button><button type=button class=ctl onclick=toggleGlass()><span id=glassText>⬛ 实色背景</span></button></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}<input name=username placeholder=账号 required><input name=password type=password placeholder=密码 required><button class=loginbtn>🚀 登录控制台</button><div class=tip>登录后可查看大屏统计、服务器资源、国旗地区、探针、阈值告警、事件记录。</div></form></body></html>'''
-BASE='''<!doctype html><html lang=zh-CN><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>服务器监控 Web</title>{% if theme_css %}<link rel="stylesheet" href="{{theme_css}}?v={{now}}">{% endif %}<style>
+document.addEventListener('DOMContentLoaded',()=>{apply();fetch('/site-meta').then(r=>r.json()).then(j=>{document.title=(j.site_name||'服务器监控')+' 登录';let a=document.getElementById('loginTitle'),b=document.getElementById('loginSub');if(a)a.textContent='🛡️✨ '+(j.site_name||'服务器监控')+'登录';if(b)b.textContent=(j.site_subtitle||'星空磨砂玻璃面板');}).catch(()=>{});})
+</script></head><body><script>let __bgv=Date.now();document.body.style.setProperty('--custom-bg',"url('/theme-bg?v="+__bgv+"')");fetch('/theme-bg?v='+__bgv,{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg','login-bg')}).catch(()=>{});</script><form class=card method=post><h1 id="loginTitle">🛡️✨ Web 面板登录</h1><div class=sub id="loginSub">服务器监控 星空磨砂玻璃控制台</div><div class=controls><button type=button class=ctl onclick=toggleTheme()><span id=themeText>☀️ 日间明亮</span></button><button type=button class=ctl onclick=toggleGlass()><span id=glassText>⬛ 实色背景</span></button></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}<input name=username placeholder=账号 required><input name=password type=password placeholder=密码 required><button class=loginbtn>🚀 登录控制台</button><div class=tip>登录后可查看大屏统计、服务器资源、国旗地区、探针、阈值告警、事件记录。</div></form></body></html>'''
+BASE='''<!doctype html><html lang=zh-CN><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>{{site_name}} Web</title>{% if has_favicon %}<link rel="icon" href="/favicon.ico?v={{now}}">{% endif %}{% if theme_css %}<link rel="stylesheet" href="{{theme_css}}?v={{now}}">{% endif %}<style>
 :root{--bg:#07111f;--card:#ffffff14;--card2:#ffffff24;--line:#ffffff28;--text:#edf5ff;--muted:#9fb0c7;--blue:#6ee7ff;--purple:#a78bfa;--green:#34d399;--red:#fb7185;--yellow:#fbbf24;--shadow:#0007}
-html.light,body.light{--bg:#dbeafe;--card:#ffffffa8;--card2:#ffffffe8;--line:#0f172a22;--text:#0f172a;--muted:#475569;--shadow:#64748b42}
-html.solid,body.solid{--card:#0f172add;--card2:#0f172af4}html.light.solid,body.light.solid{--card:#fffffff2;--card2:#f8fafcff}
+html.light,body.light{--bg:#dbeafe;--card:#ffffff55;--card2:#ffffff88;--line:#0f172a22;--text:#0f172a;--muted:#475569;--shadow:#64748b42}
+html.solid,body.solid{--card:#1d2b3faa;--card2:#263950cc}html.light.solid,body.light.solid{--card:#fffffff2;--card2:#f8fafcff}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);transition:background .35s,color .35s;overflow-x:hidden}
 body:before{content:"";position:fixed;inset:0;z-index:-3;background-image:linear-gradient(rgba(0,0,0,.16),rgba(0,0,0,.30)),url('/theme-bg?v={{now}}'),
 radial-gradient(1px 1px at 7% 14%,#fff,transparent),radial-gradient(1.6px 1.6px at 17% 73%,#bfdbfe,transparent),radial-gradient(1px 1px at 28% 33%,#fff,transparent),radial-gradient(2px 2px at 41% 17%,#e0e7ff,transparent),radial-gradient(1px 1px at 58% 80%,#fff,transparent),radial-gradient(1.8px 1.8px at 76% 28%,#cffafe,transparent),radial-gradient(1px 1px at 92% 64%,#fff,transparent),
 radial-gradient(circle at 15% 8%,#1d4e8975,transparent 32%),radial-gradient(circle at 95% 0,#7c3aed70,transparent 35%),radial-gradient(circle at 50% 110%,#06b6d455,transparent 34%),linear-gradient(180deg,#07111f,#020617 72%);animation:twinkle 16s ease-in-out infinite}
 body:after{content:"";position:fixed;inset:-35%;z-index:-2;background:radial-gradient(circle,#ffffff12 0 1px,transparent 2px);background-size:86px 86px;animation:starDrift 70s linear infinite}
-body.light:before{background:radial-gradient(circle at 20% 12%,#93c5fd99,transparent 30%),radial-gradient(circle at 90% 0,#c4b5fd99,transparent 34%),radial-gradient(circle at 45% 110%,#67e8f980,transparent 35%),linear-gradient(180deg,#eff6ff,#dbeafe 62%,#f8fafc)}body.light:after{background:radial-gradient(circle,#33415526 0 1px,transparent 2px);background-size:86px 86px}
+body.light:before{background-image:linear-gradient(rgba(255,255,255,.10),rgba(255,255,255,.18)),var(--custom-bg,none),radial-gradient(circle at 20% 12%,#93c5fd99,transparent 30%),radial-gradient(circle at 90% 0,#c4b5fd99,transparent 34%),radial-gradient(circle at 45% 110%,#67e8f980,transparent 35%),linear-gradient(180deg,#eff6ff,#dbeafe 62%,#f8fafc);background-size:cover,cover,auto,auto,auto,auto;background-position:center}body.light:after{background:radial-gradient(circle,#33415526 0 1px,transparent 2px);background-size:86px 86px}
 @keyframes twinkle{0%,100%{filter:brightness(1)}50%{filter:brightness(1.32)}}@keyframes starDrift{from{transform:translate3d(0,0,0)}to{transform:translate3d(86px,86px,0)}}
 a{color:inherit;text-decoration:none}.layout{display:grid;grid-template-columns:270px 1fr;min-height:100vh}.side{position:sticky;top:0;height:100vh;padding:22px;background:linear-gradient(180deg,var(--card2),var(--card));border-right:1px solid var(--line);backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px);box-shadow:20px 0 70px var(--shadow)}
 .brand{display:flex;gap:12px;align-items:center;margin-bottom:20px}.brand .ico{width:50px;height:50px;border-radius:19px;display:grid;place-items:center;font-size:25px;background:linear-gradient(135deg,var(--blue),var(--purple));box-shadow:0 16px 40px #67e8f944}.brand b{display:block}.brand span,.muted,.small{color:var(--muted)}.switches{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:18px}.themebtn{width:100%;padding:11px 12px;border-radius:16px;border:1px solid var(--line);background:var(--card);color:var(--text);font-weight:900;cursor:pointer;backdrop-filter:blur(16px)}
@@ -631,7 +702,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   setInterval(live,10000);
   setInterval(refreshKpi,10000);
 });
-</script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>服务器监控</b><span>星空磨砂玻璃面板</span></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
+</script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>{{site_name}}</b><span>{{site_subtitle}}</span></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
 DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div>
 <div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value data-kpi=total>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok" data-kpi=online>{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad" data-kpi=offline>{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针在线</div><div class=value data-kpi=probes>{{data.probes}}</div></div></div>
 <div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}</div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
@@ -672,7 +743,12 @@ DETAIL='''<div class=top><h1>🖥️ {{flag_icon(s)|safe}} {{s.name}}</h1><div c
 FORM='''<div class=top><h1>{{'➕' if is_add else '✏️'}} {{action}}</h1><a class=btn href="/servers">📋 返回</a></div><form method=post class=card><div class=formgrid><div><label>🏷️ 名称</label><input name=name value="{{s.name or ''}}" required></div><div><label>🌐 IP/主机</label><input name=host value="{{s.host or ''}}" required placeholder="1.2.3.4 或 example.com"></div><div><label>🔌 端口</label><input name=check_port type=number min=1 max=65535 value="{{s.check_port or 22}}"></div><div><label>🧬 系统</label><input name=os_name value="{{s.os_name or ''}}" placeholder="Ubuntu 22.04"></div><div><label>🔁 周期</label><select name=cycle><option value=monthly {{'selected' if s.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if s.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if s.cycle=='yearly' else ''}}>年付</option></select></div><div><label>📆 到期</label><input name=expire_at value="{{s.expire_at or ''}}" placeholder="2027-05-01"></div><div><label>💰 价格</label><input name=price type=number step=.01 value="{{s.price if s.price is not none else 0}}"></div><div><label>💱 币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if (s.currency or 'USD')==c else ''}}>{{c}}</option>{% endfor %}</select></div><div><label>🔥 CPU 阈值 %</label><input name=cpu_alert type=number min=1 max=100 value="{{s.cpu_alert or 90}}"></div><div><label>🧠 内存阈值 %</label><input name=mem_alert type=number min=1 max=100 value="{{s.mem_alert or 90}}"></div><div><label>💾 硬盘阈值 %</label><input name=disk_alert type=number min=1 max=100 value="{{s.disk_alert or 90}}"></div><div><label>📝 备注</label><textarea name=note rows=4>{{s.note or ''}}</textarea></div></div><hr><label><input type=checkbox name=free_forever style="width:auto" {{'checked' if s.free_forever else ''}}> 🎁 永久免费</label><label><input type=checkbox name=auto_renew style="width:auto" {{'checked' if s.auto_renew else ''}}> 🔁 自动续费</label><div class=btns style="margin-top:18px"><button class=primary type=submit>💾 保存</button><a class=btn href="/servers">取消</a></div></form>'''
 LOCAL='''<div class=top><h1>🏠 本机面板</h1><a class=btn href="/">📊 总览</a></div><div class=grid3><div class="card kpi"><div>🌐 公网IP</div><div class=value style="font-size:22px">{{local.public_ip or '未知'}}</div></div><div class="card kpi"><div>⏱️ 运行</div><div class=value style="font-size:22px">{{local.uptime or '未知'}}</div></div><div class="card kpi"><div>🧩 CPU</div><div class=value>{{local.cpu_count or 0}} 核</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📊 资源</h2>🔥 CPU {{'%.0f'|format(local.cpu or 0)}}%<div class=progress><div class=bar style="width:{{local.cpu or 0}}%"></div></div><br>🧠 内存 {{fmt(local.mem_used or 0)}} / {{fmt(local.mem_total or 0)}} ({{'%.0f'|format(local.mem_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.mem_percent or 0}}%"></div></div><br>💾 磁盘 {{fmt(local.disk_used or 0)}} / {{fmt(local.disk_total or 0)}} ({{'%.0f'|format(local.disk_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.disk_percent or 0}}%"></div></div></div><form class=card method=post><h2>✏️ 编辑本机资料</h2><label>名称</label><input name=name value="{{profile.name}}"><label>备注</label><input name=note value="{{profile.note}}"><label>周期</label><select name=cycle><option value=monthly {{'selected' if profile.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if profile.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if profile.cycle=='yearly' else ''}}>年付</option></select><label>价格</label><input name=price value="{{profile.price}}"><label>币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if profile.currency==c else ''}}>{{c}}</option>{% endfor %}</select><label>到期</label><input name=expire_at value="{{profile.expire_at}}"><button class=primary>💾 保存</button></form></div>'''
 EVENTS='''<div class=top><h1>🧾✨ 事件记录</h1><a class=btn href="/">📊 总览</a></div><div class=card><p class=small>📜 记录区域已开启滚轮浏览，鼠标放在表格内即可上下滑动查看更多历史事件。</p><div class=scrollbox><table class=table><thead><tr><th>时间</th><th>类型</th><th>标题</th><th>内容</th></tr></thead><tbody>{% for e in events %}<tr><td>{{e.created_at}}</td><td><span class=badge>{{e.event_type}}</span></td><td><b>{{e.title}}</b></td><td>{{e.content}}</td></tr>{% else %}<tr><td colspan=4>暂无事件</td></tr>{% endfor %}</tbody></table></div></div>'''
-SETTINGS='''<div class=top><h1>⚙️✨ 系统设置</h1><a class=btn href="/">📊 返回总览</a></div><div class=grid2><form class=card method=post><h2>🔐 修改网页登录密码</h2><input type=hidden name=action value=password><label>账号</label><input name=username value="{{web_user}}"><label>新密码</label><input name=password placeholder="明文输入新密码"><label>再次输入</label><input name=password2 placeholder="再次输入新密码"><button class=primary>💾 保存账号密码</button></form><form class=card method=post enctype=multipart/form-data><h2>🖼️ 自定义全站主题背景</h2><input type=hidden name=action value=upload_bg><p class=small>支持 jpg / png / webp，上传后登录页和后台页面都会使用这张图。</p><input type=file name=bg accept="image/*"><button class=primary>🌌 上传背景图</button></form></div><div class=grid2 style="margin-top:16px"><form class=card method=post><h2>🤖 TG 接口对接</h2><input type=hidden name=action value=tg><label>BOT_TOKEN</label><input name=bot_token value="{{bot_token}}" placeholder="123456:ABC"><label>ADMIN_IDS</label><input name=admin_ids value="{{admin_ids}}" placeholder="123456789,987654321"><button class=primary>💾 保存 TG 配置</button><p class=small>保存后建议执行：<code>systemctl restart server-monitor-bot server-monitor-web</code></p></form><form class=card method=post enctype=multipart/form-data><h2>🎨 上传 Komari 风格主题 ZIP</h2><input type=hidden name=action value=upload_theme_zip><p class=small>兼容含 komari-theme.json / dist / CSS / 图片的 zip 主题包，会自动读取 CSS 和图片作为当前面板皮肤。</p><input type=file name=theme_zip accept='.zip'><button class=primary>🎨 上传并应用主题包</button></form><form class=card method=post action="/api/test-tg"><h2>📨 TG 测试推送</h2><label>测试内容</label><textarea name=test_text rows=5>✅ Web 面板 TG 测试推送成功
+SETTINGS='''<div class=top><h1>⚙️✨ 系统设置</h1><a class=btn href="/">📊 返回总览</a></div>
+<div class=grid2 style="margin-top:16px">
+<form class=card method=post><h2>🏷️ 平台名字</h2><input type=hidden name=action value=site><label>平台名称</label><input name=site_name value="{{site_name}}" placeholder="服务器监控"><label>副标题</label><input name=site_subtitle value="{{site_subtitle}}" placeholder="星空磨砂玻璃面板"><button class=primary>💾 保存平台名字</button><p class=small>保存后刷新页面，侧栏名称和浏览器标题会同步变化。</p></form>
+<form class=card method=post enctype=multipart/form-data><h2>🌐 浏览器标签图标</h2><input type=hidden name=action value=favicon><p class=small>支持 ico / png / jpg / webp。当前：{{'✅ 已上传' if has_favicon else '❌ 默认图标'}}</p><input type=file name=favicon accept=".ico,image/*"><button class=primary>🌐 上传标签图标</button><p class=small>上传后 Ctrl+F5 强制刷新，浏览器标签页图标会更新。</p></form>
+</div>
+<div class=grid2><form class=card method=post><h2>🔐 修改网页登录密码</h2><input type=hidden name=action value=password><label>账号</label><input name=username value="{{web_user}}"><label>新密码</label><input name=password placeholder="明文输入新密码"><label>再次输入</label><input name=password2 placeholder="再次输入新密码"><button class=primary>💾 保存账号密码</button></form><form class=card method=post enctype=multipart/form-data><h2>🖼️ 自定义全站主题背景</h2><input type=hidden name=action value=upload_bg><p class=small>支持 jpg / png / webp，上传后登录页和后台页面都会使用这张图。</p><input type=file name=bg accept="image/*"><button class=primary>🌌 上传背景图</button></form></div><div class=grid2 style="margin-top:16px"><form class=card method=post><h2>🤖 TG 接口对接</h2><input type=hidden name=action value=tg><label>BOT_TOKEN</label><input name=bot_token value="{{bot_token}}" placeholder="123456:ABC"><label>ADMIN_IDS</label><input name=admin_ids value="{{admin_ids}}" placeholder="123456789,987654321"><button class=primary>💾 保存 TG 配置</button><p class=small>保存后建议执行：<code>systemctl restart server-monitor-bot server-monitor-web</code></p></form><form class=card method=post enctype=multipart/form-data><h2>🎨 上传 Komari 风格主题 ZIP</h2><input type=hidden name=action value=upload_theme_zip><p class=small>兼容含 komari-theme.json / dist / CSS / 图片的 zip 主题包，会自动读取 CSS 和图片作为当前面板皮肤。</p><input type=file name=theme_zip accept='.zip'><button class=primary>🎨 上传并应用主题包</button></form><form class=card method=post action="/api/test-tg"><h2>📨 TG 测试推送</h2><label>测试内容</label><textarea name=test_text rows=5>✅ Web 面板 TG 测试推送成功
 如果你收到这条消息，说明 BOT_TOKEN 和 ADMIN_IDS 正常。</textarea><input type=hidden name=bot_token value="{{bot_token}}"><input type=hidden name=admin_ids value="{{admin_ids}}"><button class=primary>🚀 发送测试推送</button><p class=small>先保存 TG 配置后再测试；测试会推送到 ADMIN_IDS。</p></form></div><div class=grid2 style="margin-top:16px"><form class=card method=post><h2>🧹 背景管理</h2><input type=hidden name=action value=clear_bg><p>当前自定义背景：{{'✅ 已上传' if has_bg else '❌ 未上传，使用默认星空'}}</p><button class=danger>恢复默认星空背景</button></form><div class=card><h2>📌 说明</h2><p class=small>复制按钮已兼容 HTTP 页面：优先使用剪贴板 API，失败时自动使用备用复制方案，并弹出复制成功提示。</p><p class=small>资源进度条每 10 秒刷新一次：绿色正常，黄色较高，红色超过阈值或接近危险。</p></div></div>'''
 
 
@@ -829,5 +905,5 @@ def age(v):
         return '未知'
 # ===== END RUNTIME FIX =====
 
-app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row)
+app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row,site_name=site_name,site_subtitle=site_subtitle,favicon_exists=favicon_exists)
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
