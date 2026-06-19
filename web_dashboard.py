@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, time, socket, sqlite3, ipaddress, secrets, html
+import os, time, socket, sqlite3, ipaddress, secrets, html, zipfile, shutil, glob
 from datetime import datetime
 from functools import wraps
 
@@ -387,15 +387,29 @@ def settings_page():
                 for old in ['web_bg.jpg','web_bg.png','web_bg.webp','web_bg.jpeg']:
                     try: os.remove(os.path.join(APP_DIR,old))
                     except Exception: pass
-                f.save(os.path.join(APP_DIR,'web_bg.'+ext)); flash('全站背景图已上传','success')
+                f.save(os.path.join(APP_DIR,'web_bg.'+ext))
+                flash('全站背景图已上传，刷新页面即可看到','success')
+            elif act=='upload_theme_zip':
+                f=request.files.get('theme_zip')
+                if not f or not f.filename: raise ValueError('请选择主题 zip 压缩包')
+                if not f.filename.lower().endswith('.zip'): raise ValueError('只支持 zip 主题包')
+                tmp=os.path.join(APP_DIR,'_theme_upload.zip')
+                f.save(tmp)
+                safe_extract_zip(tmp, THEME_DIR)
+                try: os.remove(tmp)
+                except Exception: pass
+                # Komari 主题通常包含 komari-theme.json 和 dist/，这里兼容读取其中 css / 图片资源作为本面板皮肤。
+                flash('主题 zip 已上传并应用；如果主题包含 CSS/图片，会自动作为当前 Web 皮肤资源加载','success')
             elif act=='clear_bg':
                 for old in ['web_bg.jpg','web_bg.png','web_bg.webp','web_bg.jpeg']:
                     try: os.remove(os.path.join(APP_DIR,old))
                     except Exception: pass
-                flash('已恢复默认星空背景','success')
-        except Exception as e: flash('操作失败：'+str(e),'error')
+                shutil.rmtree(THEME_DIR, ignore_errors=True)
+                flash('已恢复默认星空背景和默认主题','success')
+        except Exception as e:
+            flash('操作失败：'+str(e),'error')
         return redirect(url_for('settings_page'))
-    return render('settings',SETTINGS,web_user=WEB_USERNAME,bot_token=BOT_TOKEN,admin_ids=','.join(ADMIN_IDS) if 'ADMIN_IDS' in globals() and isinstance(ADMIN_IDS,list) else os.getenv('ADMIN_IDS',''),has_bg=bool(theme_bg_exists()))
+    return render('settings',SETTINGS,web_user=WEB_USERNAME,bot_token=BOT_TOKEN,admin_ids=','.join(ADMIN_IDS) if 'ADMIN_IDS' in globals() and isinstance(ADMIN_IDS,list) else os.getenv('ADMIN_IDS',''),has_bg=bool(theme_bg_exists()),theme_css=active_theme_css())
 @app.route('/api/servers-live')
 @login_required
 def api_servers_live():
@@ -404,83 +418,6 @@ def api_servers_live():
 # ===== END WEB V3 FIX HELPERS =====
 
 
-# ===== WEB V4 FINAL FIX HELPERS =====
-COUNTRY_NAME_CODE.update({
-    'England':'GB','英格兰':'GB','Scotland':'GB','苏格兰':'GB','Wales':'GB','威尔士':'GB',
-    'Northern Ireland':'GB','北爱尔兰':'GB','Czechia':'CZ','Czech Republic':'CZ','捷克':'CZ',
-    'Bosnia and Herzegovina':'BA','波黑':'BA','Ivory Coast':'CI','Côte d’Ivoire':'CI','科特迪瓦':'CI',
-    'Curacao':'CW','库拉索':'CW','Cape Verde':'CV','佛得角':'CV','DR Congo':'CD','刚果金':'CD',
-    'Saudi Arabia':'SA','沙特阿拉伯':'SA','New Zealand':'NZ','新西兰':'NZ','South Africa':'ZA','南非':'ZA',
-    'Qatar':'QA','卡塔尔':'QA','Switzerland':'CH','瑞士':'CH','Mexico':'MX','墨西哥':'MX',
-    'Morocco':'MA','摩洛哥':'MA','Haiti':'HT','海地':'HT','Paraguay':'PY','巴拉圭':'PY',
-    'Tunisia':'TN','突尼斯':'TN','Egypt':'EG','埃及':'EG','Iran':'IR','伊朗':'IR',
-    'Uruguay':'UY','乌拉圭':'UY','Senegal':'SN','塞内加尔':'SN','Iraq':'IQ','伊拉克':'IQ',
-    'Norway':'NO','挪威':'NO','Argentina':'AR','阿根廷':'AR','Algeria':'DZ','阿尔及利亚':'DZ',
-    'Austria':'AT','奥地利':'AT','Jordan':'JO','约旦':'JO','Portugal':'PT','葡萄牙':'PT',
-    'Uzbekistan':'UZ','乌兹别克斯坦':'UZ','Colombia':'CO','哥伦比亚':'CO','Croatia':'HR','克罗地亚':'HR',
-    'Ghana':'GH','加纳':'GH','Panama':'PA','巴拿马':'PA',
-})
-COUNTRY_CN = {
-    'United Kingdom':'英国','England':'英格兰','Scotland':'苏格兰','Wales':'威尔士','Northern Ireland':'北爱尔兰',
-    'China':'中国','Hong Kong':'香港','Taiwan':'台湾','Macau':'澳门','United States':'美国','USA':'美国',
-    'Japan':'日本','Singapore':'新加坡','South Korea':'韩国','Korea':'韩国','Germany':'德国','France':'法国',
-    'Netherlands':'荷兰','Canada':'加拿大','Australia':'澳大利亚','India':'印度','Russia':'俄罗斯','Brazil':'巴西',
-    'Turkey':'土耳其','Thailand':'泰国','Vietnam':'越南','Malaysia':'马来西亚','Philippines':'菲律宾','Indonesia':'印尼',
-    'United Arab Emirates':'阿联酋','Italy':'意大利','Spain':'西班牙','Sweden':'瑞典','Norway':'挪威','Finland':'芬兰',
-    'Poland':'波兰','Czechia':'捷克','Czech Republic':'捷克','Bosnia and Herzegovina':'波黑','Qatar':'卡塔尔',
-    'Switzerland':'瑞士','Mexico':'墨西哥','South Africa':'南非','Brazil':'巴西','Morocco':'摩洛哥','Haiti':'海地',
-    'Paraguay':'巴拉圭','Ivory Coast':'科特迪瓦','Curacao':'库拉索','Tunisia':'突尼斯','Belgium':'比利时','Egypt':'埃及',
-    'Iran':'伊朗','New Zealand':'新西兰','Cape Verde':'佛得角','Saudi Arabia':'沙特阿拉伯','Uruguay':'乌拉圭',
-    'Senegal':'塞内加尔','Iraq':'伊拉克','Argentina':'阿根廷','Algeria':'阿尔及利亚','Austria':'奥地利',
-    'Jordan':'约旦','Portugal':'葡萄牙','DR Congo':'刚果金','Uzbekistan':'乌兹别克斯坦','Colombia':'哥伦比亚',
-    'Croatia':'克罗地亚','Ghana':'加纳','Panama':'巴拿马'
-}
-REGION_CN = {'England':'英格兰','Scotland':'苏格兰','Wales':'威尔士','Northern Ireland':'北爱尔兰'}
-CITY_CN = {'London':'伦敦','Tokyo':'东京','Singapore':'新加坡','Hong Kong':'香港','Los Angeles':'洛杉矶','New York':'纽约','Frankfurt':'法兰克福','Paris':'巴黎','Amsterdam':'阿姆斯特丹','Seoul':'首尔','Sydney':'悉尼','Toronto':'多伦多','Dubai':'迪拜'}
-
-def cn_name(v, mapping):
-    raw=str(v or '').strip()
-    return mapping.get(raw, raw)
-
-def server_location_cn(s):
-    if not s: return '未知'
-    country=cn_name(s.get('country') or '', COUNTRY_CN)
-    region=cn_name(s.get('region') or '', REGION_CN)
-    city=cn_name(s.get('city') or '', CITY_CN)
-    parts=[]
-    for x in [country, region, city]:
-        if x and x not in parts and x not in ['None','未知']:
-            parts.append(x)
-    return ' '.join(parts) if parts else '未知'
-
-def bar_class(value, warn=70, bad=90):
-    try: v=float(value or 0)
-    except Exception: return ''
-    return 'bad' if v>=bad else 'warn' if v>=warn else ''
-
-@app.route('/api/test-tg', methods=['POST'])
-@login_required
-def api_test_tg():
-    token=(request.form.get('bot_token') or os.getenv('BOT_TOKEN') or BOT_TOKEN or '').strip()
-    admins=(request.form.get('admin_ids') or os.getenv('ADMIN_IDS') or ','.join(ADMIN_IDS) if isinstance(ADMIN_IDS,list) else '').strip()
-    text=(request.form.get('test_text') or '✅ Web 面板 TG 测试推送成功').strip()
-    if not token or not admins:
-        flash('请先填写 BOT_TOKEN 和 ADMIN_IDS','error')
-        return redirect(url_for('settings_page'))
-    ok_count=0; err=[]
-    for chat_id in [x.strip() for x in admins.split(',') if x.strip()]:
-        try:
-            r=requests.post(f'https://api.telegram.org/bot{token}/sendMessage', json={'chat_id':chat_id,'text':text,'parse_mode':'HTML'}, timeout=10)
-            if r.ok and r.json().get('ok'): ok_count+=1
-            else: err.append(f'{chat_id}: {r.text[:120]}')
-        except Exception as e:
-            err.append(f'{chat_id}: {e}')
-    if ok_count:
-        flash(f'TG 测试推送成功：{ok_count} 个接收人','success')
-    if err:
-        flash('TG 测试失败：'+'；'.join(err[:3]),'error')
-    return redirect(url_for('settings_page'))
-# ===== END WEB V4 FINAL FIX HELPERS =====
 
 LOGIN='''<!doctype html><html><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>登录</title><style>
 :root{--text:#edf5ff;--muted:#9fb0c7;--line:#ffffff28;--glass:#ffffff16;--glass2:#ffffff28;--a:#6ee7ff;--b:#a78bfa;--shadow:#0008}
@@ -501,10 +438,10 @@ function toggleTheme(){localStorage.setItem('theme',(localStorage.getItem('theme
 function toggleGlass(){localStorage.setItem('glass',(localStorage.getItem('glass')||'glass')==='glass'?'solid':'glass');apply()}
 document.addEventListener('DOMContentLoaded',apply)
 </script></head><body><form class=card method=post><h1>🛡️✨ Web 面板登录</h1><div class=sub>服务器监控 星空磨砂玻璃控制台</div><div class=controls><button type=button class=ctl onclick=toggleTheme()><span id=themeText>☀️ 日间明亮</span></button><button type=button class=ctl onclick=toggleGlass()><span id=glassText>⬛ 实色背景</span></button></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}<input name=username placeholder=账号 required><input name=password type=password placeholder=密码 required><button class=loginbtn>🚀 登录控制台</button><div class=tip>登录后可查看大屏统计、服务器资源、国旗地区、探针、阈值告警、事件记录。</div></form></body></html>'''
-BASE='''<!doctype html><html lang=zh-CN><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>服务器监控 Web</title><style>
+BASE='''<!doctype html><html lang=zh-CN><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>服务器监控 Web</title>{% if theme_css %}<link rel="stylesheet" href="{{theme_css}}?v={{now}}">{% endif %}<style>
 :root{--bg:#07111f;--card:#ffffff14;--card2:#ffffff24;--line:#ffffff28;--text:#edf5ff;--muted:#9fb0c7;--blue:#6ee7ff;--purple:#a78bfa;--green:#34d399;--red:#fb7185;--yellow:#fbbf24;--shadow:#0007}
-body.light{--bg:#dbeafe;--card:#ffffffa8;--card2:#ffffffe8;--line:#0f172a22;--text:#0f172a;--muted:#475569;--shadow:#64748b42}
-body.solid{--card:#0f172add;--card2:#0f172af4}body.light.solid{--card:#fffffff2;--card2:#f8fafcff}
+html.light,body.light{--bg:#dbeafe;--card:#ffffffa8;--card2:#ffffffe8;--line:#0f172a22;--text:#0f172a;--muted:#475569;--shadow:#64748b42}
+html.solid,body.solid{--card:#0f172add;--card2:#0f172af4}html.light.solid,body.light.solid{--card:#fffffff2;--card2:#f8fafcff}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);transition:background .35s,color .35s;overflow-x:hidden}
 body:before{content:"";position:fixed;inset:0;z-index:-3;background:
 radial-gradient(1px 1px at 7% 14%,#fff,transparent),radial-gradient(1.6px 1.6px at 17% 73%,#bfdbfe,transparent),radial-gradient(1px 1px at 28% 33%,#fff,transparent),radial-gradient(2px 2px at 41% 17%,#e0e7ff,transparent),radial-gradient(1px 1px at 58% 80%,#fff,transparent),radial-gradient(1.8px 1.8px at 76% 28%,#cffafe,transparent),radial-gradient(1px 1px at 92% 64%,#fff,transparent),
@@ -525,18 +462,119 @@ input,select,textarea{width:100%;padding:12px;border-radius:14px;border:1px soli
 .servercard h3{margin:0 0 8px}.servercard .meta{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.flagimg{width:24px;height:18px;object-fit:cover;border-radius:4px;box-shadow:0 0 0 1px var(--line);vertical-align:-3px;margin-right:5px}.copyok{color:var(--green);font-size:13px;margin-left:8px}.toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%) translateY(30px);background:linear-gradient(135deg,var(--blue),var(--purple));color:#07111f;padding:13px 18px;border-radius:999px;font-weight:950;box-shadow:0 20px 60px var(--shadow);opacity:0;pointer-events:none;transition:.25s;z-index:9999}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
-function applyTheme(){let theme=localStorage.getItem('theme')||'dark', glass=localStorage.getItem('glass')||'glass';document.body.classList.toggle('light',theme==='light');document.body.classList.toggle('solid',glass==='solid');let a=document.getElementById('themeText'),b=document.getElementById('glassText');if(a)a.textContent=theme==='light'?'🌙 夜间星空':'☀️ 日间明亮';if(b)b.textContent=glass==='solid'?'🧊 透明玻璃':'⬛ 实色背景'}
-function toggleTheme(){localStorage.setItem('theme',(localStorage.getItem('theme')||'dark')==='dark'?'light':'dark');applyTheme()}
-function toggleGlass(){localStorage.setItem('glass',(localStorage.getItem('glass')||'glass')==='glass'?'solid':'glass');applyTheme()}
-function setView(v){localStorage.setItem('serverView',v);document.querySelectorAll('[data-view-table]').forEach(e=>e.classList.toggle('hidden',v!=='table'));document.querySelectorAll('[data-view-card]').forEach(e=>e.classList.toggle('hidden',v!=='card'))}
-function initView(){setView(localStorage.getItem('serverView')||'card')}
-async function copyText(id){let t=document.getElementById(id);if(!t)return;let txt=t.innerText||t.textContent||'';let ok=false;try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(txt);ok=true}}catch(e){}if(!ok){try{let a=document.createElement('textarea');a.value=txt;a.setAttribute('readonly','');a.style.position='fixed';a.style.left='-9999px';a.style.top='0';document.body.appendChild(a);a.focus();a.select();ok=document.execCommand('copy');document.body.removeChild(a)}catch(e){ok=false}}let o=document.getElementById(id+'ok');if(o){o.textContent=ok?'✅ 已复制成功':'⚠️ 自动复制失败，请手动复制';setTimeout(()=>o.textContent='',2600)}showToast(ok?'✅ 探针命令已复制成功':'⚠️ 自动复制失败，请手动选择命令复制')}function showToast(msg){let x=document.getElementById('toast');if(!x){x=document.createElement('div');x.id='toast';x.className='toast';document.body.appendChild(x)}x.textContent=msg;x.classList.add('show');setTimeout(()=>x.classList.remove('show'),2600)}
-document.addEventListener('DOMContentLoaded',()=>{applyTheme();initView();live();setInterval(live,10000)});async function live(){try{let j=await(await fetch('/api/servers-live')).json();(j.servers||[]).forEach(s=>{['cpu','mem','disk'].forEach(k=>{document.querySelectorAll('[data-'+k+'="'+s.id+'"]').forEach(e=>{let v=s[k]||0;e.style.width=v+'%';let limit=Number(e.dataset.limit||90);e.classList.toggle('bad',v>=limit);e.classList.toggle('warn',v>=70&&v<limit)});});document.querySelectorAll('[data-'+k+'txt="'+s.id+'"]').forEach(e=>e.textContent=Math.round(s[k]||0)+'%')});document.querySelectorAll('[data-uptime="'+s.id+'"]').forEach(e=>e.textContent=s.uptime);document.querySelectorAll('[data-status="'+s.id+'"]').forEach(e=>e.textContent=(s.online?'🟢 ':'🔴 ')+s.status);});}catch(e){}}
-async function r(){try{let j=await(await fetch('/api/summary')).json();for(let k of ['total','online','offline','probes','expiring','expired']){let e=document.querySelector('[data-kpi="'+k+'"]');if(e)e.textContent=j[k]}let t=document.querySelector('[data-now]');if(t)t.textContent=j.time}catch(e){}}setInterval(r,10000);function delok(){return confirm('确认删除服务器？')}
+function applyTheme(){
+  let theme=localStorage.getItem('theme')||'dark';
+  let glass=localStorage.getItem('glass')||'glass';
+  document.documentElement.classList.toggle('light',theme==='light');
+  document.documentElement.classList.toggle('solid',glass==='solid');
+  document.body.classList.toggle('light',theme==='light');
+  document.body.classList.toggle('solid',glass==='solid');
+  let a=document.getElementById('themeText'),b=document.getElementById('glassText');
+  if(a)a.textContent=theme==='light'?'🌙 夜间星空':'☀️ 日间明亮';
+  if(b)b.textContent=glass==='solid'?'🧊 透明玻璃':'⬛ 实色背景';
+}
+function toggleTheme(){
+  localStorage.setItem('theme',(localStorage.getItem('theme')||'dark')==='dark'?'light':'dark');
+  applyTheme();
+}
+function toggleGlass(){
+  localStorage.setItem('glass',(localStorage.getItem('glass')||'glass')==='glass'?'solid':'glass');
+  applyTheme();
+}
+function setView(v){
+  localStorage.setItem('serverView',v);
+  document.querySelectorAll('[data-view-table]').forEach(e=>e.classList.toggle('hidden',v!=='table'));
+  document.querySelectorAll('[data-view-card]').forEach(e=>e.classList.toggle('hidden',v!=='card'));
+}
+function initView(){setView(localStorage.getItem('serverView')||'card');}
+async function copyText(id){
+  let t=document.getElementById(id);
+  if(!t)return;
+  let txt=t.innerText||t.textContent||'';
+  let ok=false;
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(txt);
+      ok=true;
+    }
+  }catch(e){}
+  if(!ok){
+    try{
+      let a=document.createElement('textarea');
+      a.value=txt;
+      a.setAttribute('readonly','');
+      a.style.position='fixed';
+      a.style.left='-9999px';
+      a.style.top='0';
+      document.body.appendChild(a);
+      a.focus();
+      a.select();
+      ok=document.execCommand('copy');
+      document.body.removeChild(a);
+    }catch(e){ok=false;}
+  }
+  let o=document.getElementById(id+'ok');
+  if(o){
+    o.textContent=ok?'✅ 已复制成功':'⚠️ 自动复制失败，请手动复制';
+    setTimeout(()=>o.textContent='',2600);
+  }
+  showToast(ok?'✅ 探针命令已复制成功':'⚠️ 自动复制失败，请手动选择命令复制');
+}
+function showToast(msg){
+  let x=document.getElementById('toast');
+  if(!x){
+    x=document.createElement('div');
+    x.id='toast';
+    x.className='toast';
+    document.body.appendChild(x);
+  }
+  x.textContent=msg;
+  x.classList.add('show');
+  setTimeout(()=>x.classList.remove('show'),2600);
+}
+async function live(){
+  try{
+    let j=await(await fetch('/api/servers-live')).json();
+    (j.servers||[]).forEach(s=>{
+      ['cpu','mem','disk'].forEach(k=>{
+        let v=Number(s[k]||0);
+        document.querySelectorAll('[data-'+k+'="'+s.id+'"]').forEach(e=>{
+          let limit=Number(e.dataset.limit||90);
+          e.style.width=Math.max(0,Math.min(100,v))+'%';
+          e.classList.toggle('bad',v>=limit);
+          e.classList.toggle('warn',v>=70&&v<limit);
+        });
+        document.querySelectorAll('[data-'+k+'txt="'+s.id+'"]').forEach(e=>e.textContent=Math.round(v)+'%');
+      });
+      document.querySelectorAll('[data-uptime="'+s.id+'"]').forEach(e=>e.textContent=s.uptime);
+      document.querySelectorAll('[data-status="'+s.id+'"]').forEach(e=>e.textContent=(s.online?'🟢 ':'🔴 ')+s.status);
+    });
+  }catch(e){}
+}
+async function refreshKpi(){
+  try{
+    let j=await(await fetch('/api/summary')).json();
+    for(let k of ['total','online','offline','probes','expiring','expired']){
+      let e=document.querySelector('[data-kpi="'+k+'"]');
+      if(e)e.textContent=j[k];
+    }
+    let t=document.querySelector('[data-now]');
+    if(t)t.textContent=j.time;
+  }catch(e){}
+}
+function delok(){return confirm('确认删除服务器？');}
+document.addEventListener('DOMContentLoaded',()=>{
+  applyTheme();
+  initView();
+  live();
+  refreshKpi();
+  setInterval(live,10000);
+  setInterval(refreshKpi,10000);
+});
 </script></head><body><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>服务器监控</b><span>星空磨砂玻璃面板</span></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
-DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div><div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value data-kpi=total>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok" data-kpi=online>{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad" data-kpi=offline>{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针在线</div><div class=value data-kpi=probes>{{data.probes}}</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>🔥 CPU {{'%.0f'|format(local.cpu or 0)}}%<div class=progress><div class="bar {{'bad' if (local.cpu or 0)>=90 else 'warn' if (local.cpu or 0)>=80 else ''}}" style="width:{{local.cpu or 0}}%"></div></div><br>🧠 内存 {{fmt_size(local.mem_used or 0)}} / {{fmt_size(local.mem_total or 0)}} ({{'%.0f'|format(local.mem_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.mem_percent or 0}}%"></div></div><br>💾 磁盘 {{fmt_size(local.disk_used or 0)}} / {{fmt_size(local.disk_total or 0)}} ({{'%.0f'|format(local.disk_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.disk_percent or 0}}%"></div></div></div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div><p class=small>支持探针真实 uptime、CPU/内存/硬盘/流量、阈值告警、续费到期、事件统计。</p></div></div><div class=card style="margin-top:16px"><h2>🖥️ 服务器面板</h2><div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}<div class="card servercard"><h3>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></div><p class=small>📡 探针：{{'🟢 在线' if s.probe_fresh else '🟠 超时/未上报'}}｜⏱️ <span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span></span>｜{{s.expire_label}}｜{{s.price_label}}</p><div class=grid3><div>🧩<br><b>{{m.cpu_cores or '?' }}C</b></div><div>🧠<br><b>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</b></div><div>💾<br><b>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</b></div></div><hr>🔥 CPU <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span><div class=progress><div class="bar {{'bad' if (m.cpu_percent or 0)>=(s.cpu_alert or 90) else ''}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div>🧠 内存 <span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span><div class=progress><div class="bar {{'bad' if (m.mem_percent or 0)>=(s.mem_alert or 90) else ''}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div>💾 硬盘 <span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span><div class=progress><div class="bar {{'bad' if (m.disk_percent or 0)>=(s.disk_alert or 90) else ''}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div><br><a class=btn href="/servers/{{s.id}}">详情</a></div>{% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div><div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态</th><th>配置</th><th>资源</th><th>续费</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></td><td><span class=badge>{{'🟢 在线' if s.online else '🔴 离线'}}</span><br><span class=small>探针：{{'🟢 在线' if s.probe_fresh else '🟠 超时/未上报'}}</span></td><td>🧩 {{m.cpu_cores or '?'}}C<br>🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}<br>💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</td><td>🔥 <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span><div class=progress><div class="bar {{'bad' if (m.cpu_percent or 0)>=(s.cpu_alert or 90) else ''}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div>🧠 <span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span><div class=progress><div class="bar {{'bad' if (m.mem_percent or 0)>=(s.mem_alert or 90) else ''}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div>💾 <span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span><div class=progress><div class="bar {{'bad' if (m.disk_percent or 0)>=(s.disk_alert or 90) else ''}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div></td><td>{{s.expire_label}}<br>{{s.price_label}}</td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=6>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div><div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td>{{e.content}}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>'''
-SERVERS='''<div class=top><h1>🖥️✨ 服务器管理</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a><a class=btn href="/">📊 总览</a></div></div><div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok">{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad">{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针</div><div class=value>{{data.probes}}</div></div></div><div class=card style="margin-top:16px"><div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}<div class="card servercard"><h3>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</h3><div class=meta><span class=badge>#{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></div><p class=small>{{s.note or '无备注'}}<br>📡 {{'🟢 在线' if s.probe_fresh else '🟠 未上报/超时'}}｜⏱️ <span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span></span>｜{{s.expire_label}}｜{{s.price_label}}</p><div>🧩 {{m.cpu_cores or '?'}}C ｜ 🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '?'}} ｜ 💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '?'}}</div><hr>🎯 阈值：🔥{{'%.0f'|format(s.cpu_alert or 90)}}% ｜ 🧠{{'%.0f'|format(s.mem_alert or 90)}}% ｜ 💾{{'%.0f'|format(s.disk_alert or 90)}}%<br><br><div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></div>{% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div><div data-view-table class=hidden><table class=table><thead><tr><th>ID</th><th>服务器</th><th>探针/配置</th><th>阈值</th><th>续费</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>#{{s.id}}</b></td><td><b>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>{{s.host}}:{{s.check_port}}｜{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span><br><span class=small>{{s.note or '无备注'}}</span></td><td>📡 {{'🟢 在线' if s.probe_fresh else '🟠 未上报/超时'}}<br>🧩 {{m.cpu_cores or '?'}}C｜🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '?'}}｜💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '?'}}</td><td>🔥 {{'%.0f'|format(s.cpu_alert or 90)}}%<br>🧠 {{'%.0f'|format(s.mem_alert or 90)}}%<br>💾 {{'%.0f'|format(s.disk_alert or 90)}}%</td><td>{{s.expire_label}}<br>{{s.price_label}}</td><td><div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></td></tr>{% else %}<tr><td colspan=6>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>'''
-DETAIL='''<div class=top><h1>🖥️ {{flag_icon(s)|safe}} {{s.name}}</h1><div class=btns><a class=btn href="/servers">📋 返回</a><a class="btn primary" href="/servers/{{s.id}}/edit">✏️ 编辑</a></div></div>{% set m=s.metrics %}<div class=grid3><div class="card kpi"><div class=label>📡 状态</div><div class="value {{'ok' if s.status.last_status=='online' else 'bad' if s.status.last_status=='offline' else ''}}">{{'🟢 在线' if s.status.last_status=='online' else '🔴 离线' if s.status.last_status=='offline' else '⚪ 未知'}}</div><div class=small>{{s.status.last_checked_at or '未知'}}</div></div><div class="card kpi"><div class=label>⏱️ 运行时长</div><div class=value><span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small>开机：{{m.boot_time or '未知'}}</div></div><div class="card kpi"><div class=label>⏰ 到期</div><div class=value style="font-size:22px">{{expire_text(s.expire_at,s.free_forever)}}</div><div class=small>{{price_text(s)}}｜{{cycle_cn(s.cycle)}}</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>⚙️ 服务器配置</h2><p><span class=badge>🆔 ID {{s.id}}</span> <span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></p><p>🌐 主机：<code>{{s.host}}:{{s.check_port}}</code></p><p>🏢 运营商：{{s.isp or '未知'}}</p><p>🧬 系统：{{s.os_name or '未知系统'}}</p><p>📝 备注：{{s.note or '无'}}</p><hr><div class=grid3><div class=card>🧩 CPU<br><b>{{m.cpu_cores or '?'}} Cores</b></div><div class=card>🧠 内存<br><b>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</b></div><div class=card>💾 硬盘<br><b>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</b></div></div></div><div class=card><h2>📊 资源使用</h2>🔥 CPU <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span> / {{'%.0f'|format(s.cpu_alert or 90)}}%<div class=progress><div class="bar {{'bad' if (m.cpu_percent or 0)>=(s.cpu_alert or 90) else ''}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div><br>🧠 内存 {{fmt_size(m.mem_used or 0) if m.mem_used else '未知'}} / {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} (<span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span>) / {{'%.0f'|format(s.mem_alert or 90)}}%<div class=progress><div class="bar {{'bad' if (m.mem_percent or 0)>=(s.mem_alert or 90) else ''}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div><br>💾 硬盘 {{fmt_size(m.disk_used or 0) if m.disk_used else '未知'}} / {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}} (<span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span>) / {{'%.0f'|format(s.disk_alert or 90)}}%<div class=progress><div class="bar {{'bad' if (m.disk_percent or 0)>=(s.disk_alert or 90) else ''}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div><hr>🌐 流量：⬇️ {{fmt_size(m.rx_bytes or 0)}} / ⬆️ {{fmt_size(m.tx_bytes or 0)}}<br>📡 探针：{{'🟢 在线' if fresh(m) else '🟠 超时/未上报'}}｜{{m.updated_at or '未知'}}</div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📡 一键部署探针</h2><p class=small>复制到这台服务器 SSH 执行，探针静默上报，离线/恢复由主机器人统一推送。</p><pre id="agentcmd">{{s.agent_cmd}}</pre><button class=primary type=button onclick="copyText('agentcmd')">📋 复制探针命令</button><span id="agentcmdok" class=copyok></span></div><div class=card><h2>🛠️ 操作</h2><div class=btns><form method=post action="/servers/{{s.id}}/check"><button class=primary>📡 立即检测</button></form><form method=post action="/servers/{{s.id}}/refresh"><button>🌍 刷新地区</button></form><a class=btn href="/servers/{{s.id}}/edit">✏️ 编辑资料/阈值</a><form method=post action="/servers/{{s.id}}/delete" onsubmit="return delok()"><button class=danger>🗑️ 删除</button></form></div><hr><h3>🎯 告警状态</h3>{% for key,label in [('cpu','🔥 CPU'),('mem','🧠 内存'),('disk','💾 硬盘')] %}{% set st=s.states.get(key) %}<p>{{label}}：{{'🚨 告警中' if st and st.active else '✅ 正常'}}{% if st %}｜上次 {{st.last_value|round(0)}}%｜{{st.last_sent_at}}{% endif %}</p>{% endfor %}</div></div>'''
+DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div><div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value data-kpi=total>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok" data-kpi=online>{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad" data-kpi=offline>{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针在线</div><div class=value data-kpi=probes>{{data.probes}}</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>🔥 CPU {{'%.0f'|format(local.cpu or 0)}}%<div class=progress><div class="bar {{'bad' if (local.cpu or 0)>=90 else 'warn' if (local.cpu or 0)>=80 else ''}}" style="width:{{local.cpu or 0}}%"></div></div><br>🧠 内存 {{fmt_size(local.mem_used or 0)}} / {{fmt_size(local.mem_total or 0)}} ({{'%.0f'|format(local.mem_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.mem_percent or 0}}%"></div></div><br>💾 磁盘 {{fmt_size(local.disk_used or 0)}} / {{fmt_size(local.disk_total or 0)}} ({{'%.0f'|format(local.disk_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.disk_percent or 0}}%"></div></div></div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div><p class=small>支持探针真实 uptime、CPU/内存/硬盘/流量、阈值告警、续费到期、事件统计。</p></div></div><div class=card style="margin-top:16px"><h2>🖥️ 服务器面板</h2><div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}<div class="card servercard"><h3>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></div><p class=small>📡 探针：{{'🟢 在线' if s.probe_fresh else '🟠 超时/未上报'}}｜⏱️ <span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span>｜⏱️ <span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span>｜<span class='{{status_color_class_by_days(s)}}'>{{s.expire_label}}</span>｜<span class='{{status_color_class_by_days(s)}}'>{{s.price_label}}</span></p><div class=grid3><div>🧩<br><b>{{m.cpu_cores or '?' }}C</b></div><div>🧠<br><b>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</b></div><div>💾<br><b>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</b></div></div><hr>🔥 CPU <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span><div class=progress><div class="bar {{bar_class(m.cpu_percent or 0,70,s.cpu_alert or 90)}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div>🧠 内存 <span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span><div class=progress><div class="bar {{bar_class(m.mem_percent or 0,70,s.mem_alert or 90)}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div>💾 硬盘 <span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span><div class=progress><div class="bar {{bar_class(m.disk_percent or 0,70,s.disk_alert or 90)}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div><br><a class=btn href="/servers/{{s.id}}">详情</a></div>{% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div><div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态</th><th>配置</th><th>资源</th><th>续费</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></td><td><span class=badge>{{'🟢 在线' if s.online else '🔴 离线'}}</span><br><span class=small>探针：{{'🟢 在线' if s.probe_fresh else '🟠 超时/未上报'}}</span></td><td>🧩 {{m.cpu_cores or '?'}}C<br>🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}<br>💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</td><td>🔥 <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span><div class=progress><div class="bar {{bar_class(m.cpu_percent or 0,70,s.cpu_alert or 90)}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div>🧠 <span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span><div class=progress><div class="bar {{bar_class(m.mem_percent or 0,70,s.mem_alert or 90)}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div>💾 <span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span><div class=progress><div class="bar {{bar_class(m.disk_percent or 0,70,s.disk_alert or 90)}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div></td><td><span class='{{status_color_class_by_days(s)}}'>{{s.expire_label}}</span><br><span class='{{status_color_class_by_days(s)}}'>{{s.price_label}}</span></td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=6>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div><div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td>{{e.content}}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>'''
+SERVERS='''<div class=top><h1>🖥️✨ 服务器管理</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a><a class=btn href="/">📊 总览</a></div></div><div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok">{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad">{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针</div><div class=value>{{data.probes}}</div></div></div><div class=card style="margin-top:16px"><div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}<div class="card servercard"><h3>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</h3><div class=meta><span class=badge>#{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></div><p class=small>{{s.note or '无备注'}}<br>📡 {{'🟢 在线' if s.probe_fresh else '🟠 未上报/超时'}}｜⏱️ <span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span>｜⏱️ <span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span>｜<span class='{{status_color_class_by_days(s)}}'>{{s.expire_label}}</span>｜<span class='{{status_color_class_by_days(s)}}'>{{s.price_label}}</span></p><div>🧩 {{m.cpu_cores or '?'}}C ｜ 🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '?'}} ｜ 💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '?'}}</div><hr>🎯 阈值：🔥{{'%.0f'|format(s.cpu_alert or 90)}}% ｜ 🧠{{'%.0f'|format(s.mem_alert or 90)}}% ｜ 💾{{'%.0f'|format(s.disk_alert or 90)}}%<br><br><div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></div>{% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div><div data-view-table class=hidden><table class=table><thead><tr><th>ID</th><th>服务器</th><th>探针/配置</th><th>阈值</th><th>续费</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>#{{s.id}}</b></td><td><b>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>{{s.host}}:{{s.check_port}}｜{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span><br><span class=small>{{s.note or '无备注'}}</span></td><td>📡 {{'🟢 在线' if s.probe_fresh else '🟠 未上报/超时'}}<br>🧩 {{m.cpu_cores or '?'}}C｜🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '?'}}｜💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '?'}}</td><td>🔥 {{'%.0f'|format(s.cpu_alert or 90)}}%<br>🧠 {{'%.0f'|format(s.mem_alert or 90)}}%<br>💾 {{'%.0f'|format(s.disk_alert or 90)}}%</td><td><span class='{{status_color_class_by_days(s)}}'>{{s.expire_label}}</span><br><span class='{{status_color_class_by_days(s)}}'>{{s.price_label}}</span></td><td><div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></td></tr>{% else %}<tr><td colspan=6>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>'''
+DETAIL='''<div class=top><h1>🖥️ {{flag_icon(s)|safe}} {{s.name}}</h1><div class=btns><a class=btn href="/servers">📋 返回</a><a class="btn primary" href="/servers/{{s.id}}/edit">✏️ 编辑</a></div></div>{% set m=s.metrics %}<div class=grid3><div class="card kpi"><div class=label>📡 状态</div><div class="value {{'ok' if s.status.last_status=='online' else 'bad' if s.status.last_status=='offline' else ''}}">{{'🟢 在线' if s.status.last_status=='online' else '🔴 离线' if s.status.last_status=='offline' else '⚪ 未知'}}</div><div class=small>{{s.status.last_checked_at or '未知'}}</div></div><div class="card kpi"><div class=label>⏱️ 运行时长</div><div class=value><span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span></div><div class=small>开机：{{m.boot_time or '未知'}}</div></div><div class="card kpi"><div class=label>⏰ 到期</div><div class=value style="font-size:22px">{{expire_text(s.expire_at,s.free_forever)}}</div><div class=small>{{price_text(s)}}｜{{cycle_cn(s.cycle)}}</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>⚙️ 服务器配置</h2><p><span class=badge>🆔 ID {{s.id}}</span> <span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></p><p>🌐 主机：<code>{{s.host}}:{{s.check_port}}</code></p><p>🏢 运营商：{{s.isp or '未知'}}</p><p>🧬 系统：{{s.os_name or '未知系统'}}</p><p>📝 备注：{{s.note or '无'}}</p><hr><div class=grid3><div class=card>🧩 CPU<br><b>{{m.cpu_cores or '?'}} Cores</b></div><div class=card>🧠 内存<br><b>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</b></div><div class=card>💾 硬盘<br><b>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</b></div></div></div><div class=card><h2>📊 资源使用</h2>🔥 CPU <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span> / {{'%.0f'|format(s.cpu_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.cpu_percent or 0,70,s.cpu_alert or 90)}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div><br>🧠 内存 {{fmt_size(m.mem_used or 0) if m.mem_used else '未知'}} / {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} (<span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span>) / {{'%.0f'|format(s.mem_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.mem_percent or 0,70,s.mem_alert or 90)}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div><br>💾 硬盘 {{fmt_size(m.disk_used or 0) if m.disk_used else '未知'}} / {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}} (<span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span>) / {{'%.0f'|format(s.disk_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.disk_percent or 0,70,s.disk_alert or 90)}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div><hr>🌐 流量：⬇️ {{fmt_size(m.rx_bytes or 0)}} / ⬆️ {{fmt_size(m.tx_bytes or 0)}}<br>📡 探针：{{'🟢 在线' if fresh(m) else '🟠 超时/未上报'}}｜{{m.updated_at or '未知'}}</div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📡 一键部署探针</h2><p class=small>复制到这台服务器 SSH 执行，探针静默上报，离线/恢复由主机器人统一推送。</p><pre id="agentcmd">{{s.agent_cmd}}</pre><button class=primary type=button onclick="copyText('agentcmd')">📋 复制探针命令</button><span id="agentcmdok" class=copyok></span></div><div class=card><h2>🛠️ 操作</h2><div class=btns><form method=post action="/servers/{{s.id}}/check"><button class=primary>📡 立即检测</button></form><form method=post action="/servers/{{s.id}}/refresh"><button>🌍 刷新地区</button></form><a class=btn href="/servers/{{s.id}}/edit">✏️ 编辑资料/阈值</a><form method=post action="/servers/{{s.id}}/delete" onsubmit="return delok()"><button class=danger>🗑️ 删除</button></form></div><hr><h3>🎯 告警状态</h3>{% for key,label in [('cpu','🔥 CPU'),('mem','🧠 内存'),('disk','💾 硬盘')] %}{% set st=s.states.get(key) %}<p>{{label}}：{{'🚨 告警中' if st and st.active else '✅ 正常'}}{% if st %}｜上次 {{st.last_value|round(0)}}%｜{{st.last_sent_at}}{% endif %}</p>{% endfor %}</div></div>'''
 FORM='''<div class=top><h1>{{'➕' if is_add else '✏️'}} {{action}}</h1><a class=btn href="/servers">📋 返回</a></div><form method=post class=card><div class=formgrid><div><label>🏷️ 名称</label><input name=name value="{{s.name or ''}}" required></div><div><label>🌐 IP/主机</label><input name=host value="{{s.host or ''}}" required placeholder="1.2.3.4 或 example.com"></div><div><label>🔌 端口</label><input name=check_port type=number min=1 max=65535 value="{{s.check_port or 22}}"></div><div><label>🧬 系统</label><input name=os_name value="{{s.os_name or ''}}" placeholder="Ubuntu 22.04"></div><div><label>🔁 周期</label><select name=cycle><option value=monthly {{'selected' if s.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if s.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if s.cycle=='yearly' else ''}}>年付</option></select></div><div><label>📆 到期</label><input name=expire_at value="{{s.expire_at or ''}}" placeholder="2027-05-01"></div><div><label>💰 价格</label><input name=price type=number step=.01 value="{{s.price if s.price is not none else 0}}"></div><div><label>💱 币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if (s.currency or 'USD')==c else ''}}>{{c}}</option>{% endfor %}</select></div><div><label>🔥 CPU 阈值 %</label><input name=cpu_alert type=number min=1 max=100 value="{{s.cpu_alert or 90}}"></div><div><label>🧠 内存阈值 %</label><input name=mem_alert type=number min=1 max=100 value="{{s.mem_alert or 90}}"></div><div><label>💾 硬盘阈值 %</label><input name=disk_alert type=number min=1 max=100 value="{{s.disk_alert or 90}}"></div><div><label>📝 备注</label><textarea name=note rows=4>{{s.note or ''}}</textarea></div></div><hr><label><input type=checkbox name=free_forever style="width:auto" {{'checked' if s.free_forever else ''}}> 🎁 永久免费</label><label><input type=checkbox name=auto_renew style="width:auto" {{'checked' if s.auto_renew else ''}}> 🔁 自动续费</label><div class=btns style="margin-top:18px"><button class=primary type=submit>💾 保存</button><a class=btn href="/servers">取消</a></div></form>'''
 LOCAL='''<div class=top><h1>🏠 本机面板</h1><a class=btn href="/">📊 总览</a></div><div class=grid3><div class="card kpi"><div>🌐 公网IP</div><div class=value style="font-size:22px">{{local.public_ip or '未知'}}</div></div><div class="card kpi"><div>⏱️ 运行</div><div class=value style="font-size:22px">{{local.uptime or '未知'}}</div></div><div class="card kpi"><div>🧩 CPU</div><div class=value>{{local.cpu_count or 0}} 核</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📊 资源</h2>🔥 CPU {{'%.0f'|format(local.cpu or 0)}}%<div class=progress><div class=bar style="width:{{local.cpu or 0}}%"></div></div><br>🧠 内存 {{fmt(local.mem_used or 0)}} / {{fmt(local.mem_total or 0)}} ({{'%.0f'|format(local.mem_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.mem_percent or 0}}%"></div></div><br>💾 磁盘 {{fmt(local.disk_used or 0)}} / {{fmt(local.disk_total or 0)}} ({{'%.0f'|format(local.disk_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.disk_percent or 0}}%"></div></div></div><form class=card method=post><h2>✏️ 编辑本机资料</h2><label>名称</label><input name=name value="{{profile.name}}"><label>备注</label><input name=note value="{{profile.note}}"><label>周期</label><select name=cycle><option value=monthly {{'selected' if profile.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if profile.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if profile.cycle=='yearly' else ''}}>年付</option></select><label>价格</label><input name=price value="{{profile.price}}"><label>币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if profile.currency==c else ''}}>{{c}}</option>{% endfor %}</select><label>到期</label><input name=expire_at value="{{profile.expire_at}}"><button class=primary>💾 保存</button></form></div>'''
 EVENTS='''<div class=top><h1>🧾✨ 事件记录</h1><a class=btn href="/">📊 总览</a></div><div class=card><p class=small>📜 记录区域已开启滚轮浏览，鼠标放在表格内即可上下滑动查看更多历史事件。</p><div class=scrollbox><table class=table><thead><tr><th>时间</th><th>类型</th><th>标题</th><th>内容</th></tr></thead><tbody>{% for e in events %}<tr><td>{{e.created_at}}</td><td><span class=badge>{{e.event_type}}</span></td><td><b>{{e.title}}</b></td><td>{{e.content}}</td></tr>{% else %}<tr><td colspan=4>暂无事件</td></tr>{% endfor %}</tbody></table></div></div>'''
@@ -544,23 +582,155 @@ SETTINGS='''<div class=top><h1>⚙️✨ 系统设置</h1><a class=btn href="/">
 如果你收到这条消息，说明 BOT_TOKEN 和 ADMIN_IDS 正常。</textarea><input type=hidden name=bot_token value="{{bot_token}}"><input type=hidden name=admin_ids value="{{admin_ids}}"><button class=primary>🚀 发送测试推送</button><p class=small>先保存 TG 配置后再测试；测试会推送到 ADMIN_IDS。</p></form></div><div class=grid2 style="margin-top:16px"><form class=card method=post><h2>🧹 背景管理</h2><input type=hidden name=action value=clear_bg><p>当前自定义背景：{{'✅ 已上传' if has_bg else '❌ 未上传，使用默认星空'}}</p><button class=danger>恢复默认星空背景</button></form><div class=card><h2>📌 说明</h2><p class=small>复制按钮已兼容 HTTP 页面：优先使用剪贴板 API，失败时自动使用备用复制方案，并弹出复制成功提示。</p><p class=small>资源进度条每 10 秒刷新一次：绿色正常，黄色较高，红色超过阈值或接近危险。</p></div></div>'''
 
 
-# ===== WEB V5 FLAG IMAGE FIX =====
+
+
+# ===== WEB V6 FINAL UI FIX HELPERS =====
+COUNTRY_NAME_CODE.update({
+    'England':'GB','英格兰':'GB','Scotland':'GB','苏格兰':'GB','Wales':'GB','威尔士':'GB',
+    'Northern Ireland':'GB','北爱尔兰':'GB','UK':'GB','Great Britain':'GB','Czechia':'CZ','Czech Republic':'CZ','捷克':'CZ',
+    'Bosnia and Herzegovina':'BA','波黑':'BA','Ivory Coast':'CI','Côte d’Ivoire':'CI','科特迪瓦':'CI',
+    'Curacao':'CW','库拉索':'CW','Cape Verde':'CV','佛得角':'CV','DR Congo':'CD','刚果金':'CD',
+    'Saudi Arabia':'SA','沙特阿拉伯':'SA','New Zealand':'NZ','新西兰':'NZ','South Africa':'ZA','南非':'ZA',
+    'Qatar':'QA','卡塔尔':'QA','Switzerland':'CH','瑞士':'CH','Mexico':'MX','墨西哥':'MX',
+    'Morocco':'MA','摩洛哥':'MA','Haiti':'HT','海地':'HT','Paraguay':'PY','巴拉圭':'PY',
+    'Tunisia':'TN','突尼斯':'TN','Egypt':'EG','埃及':'EG','Iran':'IR','伊朗':'IR',
+    'Uruguay':'UY','乌拉圭':'UY','Senegal':'SN','塞内加尔':'SN','Iraq':'IQ','伊拉克':'IQ',
+    'Argentina':'AR','阿根廷':'AR','Algeria':'DZ','阿尔及利亚':'DZ','Austria':'AT','奥地利':'AT',
+    'Jordan':'JO','约旦':'JO','Portugal':'PT','葡萄牙':'PT','Uzbekistan':'UZ','乌兹别克斯坦':'UZ',
+    'Colombia':'CO','哥伦比亚':'CO','Croatia':'HR','克罗地亚':'HR','Ghana':'GH','加纳':'GH','Panama':'PA','巴拿马':'PA',
+})
+COUNTRY_CN = {
+    'United Kingdom':'英国','England':'英格兰','Scotland':'苏格兰','Wales':'威尔士','Northern Ireland':'北爱尔兰','UK':'英国','Great Britain':'英国',
+    'China':'中国','Hong Kong':'香港','Taiwan':'台湾','Macau':'澳门','United States':'美国','USA':'美国',
+    'Japan':'日本','Singapore':'新加坡','South Korea':'韩国','Korea':'韩国','Germany':'德国','France':'法国',
+    'Netherlands':'荷兰','Canada':'加拿大','Australia':'澳大利亚','India':'印度','Russia':'俄罗斯','Brazil':'巴西',
+    'Turkey':'土耳其','Thailand':'泰国','Vietnam':'越南','Malaysia':'马来西亚','Philippines':'菲律宾','Indonesia':'印尼',
+    'United Arab Emirates':'阿联酋','Italy':'意大利','Spain':'西班牙','Sweden':'瑞典','Norway':'挪威','Finland':'芬兰',
+    'Poland':'波兰','Czechia':'捷克','Czech Republic':'捷克','Bosnia and Herzegovina':'波黑','Qatar':'卡塔尔',
+    'Switzerland':'瑞士','Mexico':'墨西哥','South Africa':'南非','Morocco':'摩洛哥','Haiti':'海地','Paraguay':'巴拉圭',
+    'Ivory Coast':'科特迪瓦','Curacao':'库拉索','Tunisia':'突尼斯','Belgium':'比利时','Egypt':'埃及','Iran':'伊朗',
+    'New Zealand':'新西兰','Cape Verde':'佛得角','Saudi Arabia':'沙特阿拉伯','Uruguay':'乌拉圭','Senegal':'塞内加尔',
+    'Iraq':'伊拉克','Argentina':'阿根廷','Algeria':'阿尔及利亚','Austria':'奥地利','Jordan':'约旦','Portugal':'葡萄牙',
+    'DR Congo':'刚果金','Uzbekistan':'乌兹别克斯坦','Colombia':'哥伦比亚','Croatia':'克罗地亚','Ghana':'加纳','Panama':'巴拿马'
+}
+REGION_CN = {'England':'英格兰','Scotland':'苏格兰','Wales':'威尔士','Northern Ireland':'北爱尔兰'}
+CITY_CN = {'London':'伦敦','Tokyo':'东京','Singapore':'新加坡','Hong Kong':'香港','Los Angeles':'洛杉矶','New York':'纽约','Frankfurt':'法兰克福','Paris':'巴黎','Amsterdam':'阿姆斯特丹','Seoul':'首尔','Sydney':'悉尼','Toronto':'多伦多','Dubai':'迪拜'}
+
+def cn_name(v, mapping):
+    raw=str(v or '').strip()
+    return mapping.get(raw, raw)
+
 def server_country_code(s):
     if not s: return ''
     code=(s.get('country_code') or '').strip().upper()
     if not code:
         code=country_code_guess(s.get('country') or '').upper()
-    if code == 'UK':
-        code = 'GB'
-    return code if len(code)==2 else ''
+    if code == 'UK': code = 'GB'
+    return code if len(code)==2 and code.isalpha() else ''
 
 def flag_icon(s):
     code=server_country_code(s)
     if not code:
         return '<span title="未知地区">🌐</span>'
-    # 使用 flagcdn 图片，避免 Windows/部分浏览器把国旗 emoji 显示成 GB/US 字母。
     return f'<img class="flagimg" src="https://flagcdn.com/w40/{code.lower()}.png" srcset="https://flagcdn.com/w80/{code.lower()}.png 2x" width="24" height="18" alt="{code}" title="{code}">'
-# ===== END WEB V5 FLAG IMAGE FIX =====
+
+def server_location_cn(s):
+    if not s: return '未知'
+    country=cn_name(s.get('country') or '', COUNTRY_CN)
+    region=cn_name(s.get('region') or '', REGION_CN)
+    city=cn_name(s.get('city') or '', CITY_CN)
+    parts=[]
+    for x in [country, region, city]:
+        if x and x not in parts and x not in ['None','未知']:
+            parts.append(x)
+    return ' '.join(parts) if parts else '未知'
+
+def expire_days_value(s):
+    try:
+        if truth(s.get('free_forever')): return 999999
+        exp=str(s.get('expire_at') or '').strip()
+        if exp in ['永久','永久免费']: return 999999
+        return (pdt(exp).date()-datetime.now().date()).days
+    except Exception:
+        return None
+
+def status_color_class_by_days(s):
+    d=expire_days_value(s)
+    if d is None: return 'muted'
+    if d < 0 or d <= 7: return 'danger-text'
+    if d <= 30: return 'warn-text'
+    return 'ok-text'
+
+def bar_class(value, warn=70, bad=90):
+    try: v=float(value or 0)
+    except Exception: return ''
+    return 'bad' if v>=bad else 'warn' if v>=warn else ''
+
+THEME_DIR=os.path.join(APP_DIR,'web_theme')
+def theme_bg_exists():
+    for fn in ['web_bg.jpg','web_bg.png','web_bg.webp','web_bg.jpeg']:
+        if os.path.exists(os.path.join(APP_DIR,fn)): return os.path.join(APP_DIR,fn)
+    for pat in ['*.jpg','*.jpeg','*.png','*.webp']:
+        files=glob.glob(os.path.join(THEME_DIR,'**',pat), recursive=True)
+        if files: return files[0]
+    return ''
+
+@app.route('/theme-bg')
+@login_required
+def theme_bg():
+    from flask import send_file, abort, make_response
+    fn=theme_bg_exists()
+    if not fn: abort(404)
+    resp=make_response(send_file(fn))
+    resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+    return resp
+
+@app.route('/theme-assets/<path:name>')
+@login_required
+def theme_assets(name):
+    from flask import send_from_directory, abort
+    root=os.path.abspath(THEME_DIR)
+    target=os.path.abspath(os.path.join(root,name))
+    if not target.startswith(root) or not os.path.exists(target): abort(404)
+    return send_from_directory(root, name)
+
+def active_theme_css():
+    css_files=glob.glob(os.path.join(THEME_DIR,'**','*.css'), recursive=True)
+    if not css_files: return ''
+    rel=os.path.relpath(css_files[0], THEME_DIR).replace(os.sep,'/')
+    return f'/theme-assets/{rel}'
+
+def safe_extract_zip(zip_path, dest):
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as z:
+        for member in z.infolist():
+            name=member.filename.replace('\\','/')
+            if name.startswith('/') or '..' in name.split('/'):
+                continue
+            z.extract(member, dest)
+
+@app.route('/api/test-tg', methods=['POST'])
+@login_required
+def api_test_tg():
+    token=(request.form.get('bot_token') or os.getenv('BOT_TOKEN') or BOT_TOKEN or '').strip()
+    admins=(request.form.get('admin_ids') or os.getenv('ADMIN_IDS') or (','.join(ADMIN_IDS) if isinstance(ADMIN_IDS,list) else '')).strip()
+    text=(request.form.get('test_text') or '✅ Web 面板 TG 测试推送成功').strip()
+    if not token or not admins:
+        flash('请先填写 BOT_TOKEN 和 ADMIN_IDS','error')
+        return redirect(url_for('settings_page'))
+    ok_count=0; err=[]
+    for chat_id in [x.strip() for x in admins.split(',') if x.strip()]:
+        try:
+            r=requests.post(f'https://api.telegram.org/bot{token}/sendMessage', json={'chat_id':chat_id,'text':text,'parse_mode':'HTML'}, timeout=10)
+            if r.ok and r.json().get('ok'): ok_count+=1
+            else: err.append(f'{chat_id}: {r.text[:120]}')
+        except Exception as e:
+            err.append(f'{chat_id}: {e}')
+    if ok_count: flash(f'TG 测试推送成功：{ok_count} 个接收人','success')
+    if err: flash('TG 测试失败：'+'；'.join(err[:3]),'error')
+    return redirect(url_for('settings_page'))
+# ===== END WEB V6 FINAL UI FIX HELPERS =====
 
 # ===== RUNTIME FIX: age helper =====
 def age(v):
@@ -570,5 +740,5 @@ def age(v):
         return '未知'
 # ===== END RUNTIME FIX =====
 
-app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code)
+app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css)
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
