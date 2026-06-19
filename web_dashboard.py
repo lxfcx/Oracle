@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 
 import requests
-from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify, flash
+from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify, flash, make_response
 from werkzeug.security import check_password_hash
 try:
     from dateutil.parser import parse as parse_date
@@ -343,7 +343,14 @@ def server_flag(s):
     return flag(code)
 def theme_bg_exists():
     for fn in ['web_bg.jpg','web_bg.png','web_bg.webp','web_bg.jpeg']:
-        if os.path.exists(os.path.join(APP_DIR,fn)): return fn
+        p=os.path.join(APP_DIR,fn)
+        if os.path.exists(p):
+            return p
+    theme_dir=os.path.join(APP_DIR,'web_theme')
+    for pat in ['*.jpg','*.jpeg','*.png','*.webp','*.gif']:
+        files=glob.glob(os.path.join(theme_dir,'**',pat), recursive=True)
+        if files:
+            return files[0]
     return ''
 @app.route('/theme-bg')
 def theme_bg():
@@ -480,7 +487,7 @@ function apply(){let theme=localStorage.getItem('theme')||'dark', glass=localSto
 function toggleTheme(){localStorage.setItem('theme',(localStorage.getItem('theme')||'dark')==='dark'?'light':'dark');apply()}
 function toggleGlass(){localStorage.setItem('glass',(localStorage.getItem('glass')||'glass')==='glass'?'solid':'glass');apply()}
 document.addEventListener('DOMContentLoaded',apply)
-</script></head><body><form class=card method=post><h1>🛡️✨ Web 面板登录</h1><div class=sub>服务器监控 星空磨砂玻璃控制台</div><div class=controls><button type=button class=ctl onclick=toggleTheme()><span id=themeText>☀️ 日间明亮</span></button><button type=button class=ctl onclick=toggleGlass()><span id=glassText>⬛ 实色背景</span></button></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}<input name=username placeholder=账号 required><input name=password type=password placeholder=密码 required><button class=loginbtn>🚀 登录控制台</button><div class=tip>登录后可查看大屏统计、服务器资源、国旗地区、探针、阈值告警、事件记录。</div></form></body></html>'''
+</script></head><body><script>let __bgv=Date.now();document.body.style.setProperty('--custom-bg',"url('/theme-bg?v="+__bgv+"')");fetch('/theme-bg?v='+__bgv,{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg','login-bg')}).catch(()=>{});</script><form class=card method=post><h1>🛡️✨ Web 面板登录</h1><div class=sub>服务器监控 星空磨砂玻璃控制台</div><div class=controls><button type=button class=ctl onclick=toggleTheme()><span id=themeText>☀️ 日间明亮</span></button><button type=button class=ctl onclick=toggleGlass()><span id=glassText>⬛ 实色背景</span></button></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}<input name=username placeholder=账号 required><input name=password type=password placeholder=密码 required><button class=loginbtn>🚀 登录控制台</button><div class=tip>登录后可查看大屏统计、服务器资源、国旗地区、探针、阈值告警、事件记录。</div></form></body></html>'''
 BASE='''<!doctype html><html lang=zh-CN><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>服务器监控 Web</title>{% if theme_css %}<link rel="stylesheet" href="{{theme_css}}?v={{now}}">{% endif %}<style>
 :root{--bg:#07111f;--card:#ffffff14;--card2:#ffffff24;--line:#ffffff28;--text:#edf5ff;--muted:#9fb0c7;--blue:#6ee7ff;--purple:#a78bfa;--green:#34d399;--red:#fb7185;--yellow:#fbbf24;--shadow:#0007}
 html.light,body.light{--bg:#dbeafe;--card:#ffffffa8;--card2:#ffffffe8;--line:#0f172a22;--text:#0f172a;--muted:#475569;--shadow:#64748b42}
@@ -505,6 +512,14 @@ input,select,textarea{width:100%;padding:12px;border-radius:14px;border:1px soli
 .servercard h3{margin:0 0 8px}.servercard .meta{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.flagimg{width:24px;height:18px;object-fit:cover;border-radius:4px;box-shadow:0 0 0 1px var(--line);vertical-align:-3px;margin-right:5px}.copyok{color:var(--green);font-size:13px;margin-left:8px}.toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%) translateY(30px);background:linear-gradient(135deg,var(--blue),var(--purple));color:#07111f;padding:13px 18px;border-radius:999px;font-weight:950;box-shadow:0 20px 60px var(--shadow);opacity:0;pointer-events:none;transition:.25s;z-index:9999}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
 .progressrow{display:grid;grid-template-columns:56px 1fr 48px;align-items:center;gap:10px;margin:10px 0;font-size:15px;font-weight:850}.progressrow b{text-align:right}.bar{transition:width .6s ease}.ok-text{color:var(--green)!important;font-weight:950}.warn-text{color:var(--yellow)!important;font-weight:950}.danger-text{color:var(--red)!important;font-weight:950}.muted-text{color:var(--muted)!important}.servercard h3{font-size:19px;font-weight:950}.servercard,.table td{font-size:15px}.badge{font-weight:850}.kpi .value{font-weight:950}.themebtn,.btn,button{font-weight:950}
+
+.server-title{display:flex!important;align-items:center!important;gap:7px!important;flex-wrap:nowrap!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+.server-title .dot{width:14px;height:14px;border-radius:50%;display:inline-block;flex:0 0 auto;box-shadow:0 0 0 2px rgba(0,0,0,.25)}
+.server-title .dot.online{background:#16c75f}.server-title .dot.offline{background:#ff4d5e}.server-title .name{overflow:hidden;text-overflow:ellipsis}
+.flagimg{flex:0 0 auto}
+body.has-custom-bg:before{background-image:linear-gradient(rgba(0,0,0,.12),rgba(0,0,0,.25)),var(--custom-bg),radial-gradient(1px 1px at 7% 14%,#fff,transparent),radial-gradient(circle at 15% 8%,#1d4e8975,transparent 32%),radial-gradient(circle at 95% 0,#7c3aed70,transparent 35%),linear-gradient(180deg,#07111f,#020617 72%)!important;background-size:cover,cover,auto,auto,auto,auto!important;background-position:center!important}
+body.has-custom-bg.login-bg:before{background-image:linear-gradient(rgba(0,0,0,.12),rgba(0,0,0,.25)),var(--custom-bg),radial-gradient(1px 1px at 8% 12%,#fff,transparent),radial-gradient(circle at 18% 18%,#1d4ed875,transparent 34%),radial-gradient(circle at 82% 4%,#7c3aed70,transparent 38%),linear-gradient(180deg,#07111f,#020617 72%)!important;background-size:cover,cover,auto,auto,auto,auto!important;background-position:center!important}
+
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
 function applyTheme(){
@@ -616,13 +631,13 @@ document.addEventListener('DOMContentLoaded',()=>{
   setInterval(live,10000);
   setInterval(refreshKpi,10000);
 });
-</script></head><body><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>服务器监控</b><span>星空磨砂玻璃面板</span></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
+</script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>服务器监控</b><span>星空磨砂玻璃面板</span></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
 DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div>
 <div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value data-kpi=total>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok" data-kpi=online>{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad" data-kpi=offline>{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针在线</div><div class=value data-kpi=probes>{{data.probes}}</div></div></div>
 <div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}</div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
 <div class=card style="margin-top:16px"><h2>🖥️ 所有服务器</h2>
 <div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}
-<div class="card servercard"><h3>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{s.price_label}}</span><span class="badge {{status_color_class_by_days(s)}}">{{s.expire_label}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small>🧩 {{m.cpu_cores or '?'}}C ｜ 🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} ｜ 💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
+<div class="card servercard"><h3 class="server-title"><span class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{s.price_label}}</span><span class="badge {{status_color_class_by_days(s)}}">{{s.expire_label}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small>🧩 {{m.cpu_cores or '?'}}C ｜ 🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} ｜ 💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
 {% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>
 <div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态/在线时长</th><th>资源进度</th><th>费用/到期</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{s.price_label}}</span><br><span class="{{status_color_class_by_days(s)}}">{{s.expire_label}}</span></td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=5>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>
 <div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td>{{e.content}}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>'''
@@ -633,7 +648,7 @@ SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><bu
 <div data-view-card class=cardgrid>
 {% for s in data.servers %}{% set m=s.metrics %}
 <div class="card servercard">
-<h3>{{'🟢' if s.online else '🔴'}} {{flag_icon(s)|safe}} {{s.name}}</h3>
+<h3 class="server-title"><span class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3>
 <div class=meta><span class=badge>#{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{s.price_label}}</span><span class="badge {{status_color_class_by_days(s)}}">{{s.expire_label}}</span><span class=badge data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div>
 <div class=small>🧩 {{m.cpu_cores or '?'}}C ｜ 🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} ｜ 💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</div>
@@ -764,8 +779,13 @@ def theme_assets(name):
     return send_from_directory(root, name)
 
 def active_theme_css():
-    css_files=glob.glob(os.path.join(THEME_DIR,'**','*.css'), recursive=True)
-    if not css_files: return ''
+    theme_dir=os.path.join(APP_DIR,'web_theme')
+    for pat in ['*.css']:
+        files=glob.glob(os.path.join(theme_dir,'**',pat), recursive=True)
+        if files:
+            rel=os.path.relpath(files[0], theme_dir).replace(os.sep,'/')
+            return '/theme-assets/'+rel
+    return ''
     rel=os.path.relpath(css_files[0], THEME_DIR).replace(os.sep,'/')
     return f'/theme-assets/{rel}'
 
