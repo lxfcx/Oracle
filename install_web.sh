@@ -8,7 +8,7 @@ WEB_ENV="${APP_DIR}/.env.web"
 WEB_VENV="${APP_DIR}/web-venv"
 WEB_FILE="${APP_DIR}/web_dashboard.py"
 if [ "$(id -u)" -ne 0 ]; then echo "❌ 请使用 root 执行，或前面加 sudo"; exit 1; fi
-banner(){ echo; echo "🌐✨ Telegram Server Monitor Web 星空磨砂玻璃面板 ✨🌐"; echo "━━━━━━━━━━━━━━━━━━━━"; }
+banner(){ echo; echo "🌐✨ Telegram Server Monitor Web 星空磨砂玻璃大屏面板 ✨🌐"; echo "━━━━━━━━━━━━━━━━━━━━"; }
 install_or_update(){
   banner; echo "🚀 开始安装 / 更新 Web 面板..."
   apt update
