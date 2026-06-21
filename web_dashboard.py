@@ -56,7 +56,7 @@ def init_db():
     for col,d in [('country',"TEXT DEFAULT ''"),('country_code',"TEXT DEFAULT ''"),('region',"TEXT DEFAULT ''"),('city',"TEXT DEFAULT ''"),('isp',"TEXT DEFAULT ''"),('os_name',"TEXT DEFAULT ''"),('last_meta_at',"TEXT DEFAULT ''"),('free_forever','INTEGER DEFAULT 0'),('auto_renew','INTEGER DEFAULT 0'),('cpu_alert','REAL DEFAULT 90'),('mem_alert','REAL DEFAULT 90'),('disk_alert','REAL DEFAULT 90')]: ensure_col(c,'servers',col,d)
     c.execute("""CREATE TABLE IF NOT EXISTS server_status(server_id INTEGER PRIMARY KEY,last_status TEXT DEFAULT 'unknown',last_checked_at TEXT,last_changed_at TEXT,fail_count INTEGER DEFAULT 0,success_count INTEGER DEFAULT 0,notified_offline INTEGER DEFAULT 0,first_fail_at TEXT DEFAULT '',first_recover_at TEXT DEFAULT '',online_since TEXT DEFAULT '',offline_since TEXT DEFAULT '')""")
     c.execute("""CREATE TABLE IF NOT EXISTS server_metrics(server_id INTEGER PRIMARY KEY,name TEXT DEFAULT '',hostname TEXT DEFAULT '',public_ip TEXT DEFAULT '',uptime_seconds INTEGER DEFAULT 0,boot_time TEXT DEFAULT '',cpu_percent REAL DEFAULT 0,mem_percent REAL DEFAULT 0,disk_percent REAL DEFAULT 0,rx_bytes INTEGER DEFAULT 0,tx_bytes INTEGER DEFAULT 0,cpu_cores INTEGER DEFAULT 0,mem_total INTEGER DEFAULT 0,disk_total INTEGER DEFAULT 0,disk_used INTEGER DEFAULT 0,mem_used INTEGER DEFAULT 0,swap_total INTEGER DEFAULT 0,swap_used INTEGER DEFAULT 0,swap_percent REAL DEFAULT 0,load1 REAL DEFAULT 0,load5 REAL DEFAULT 0,load15 REAL DEFAULT 0,updated_at TEXT DEFAULT '',raw TEXT DEFAULT '')""")
-    for col,d in [('swap_total','INTEGER DEFAULT 0'),('swap_used','INTEGER DEFAULT 0'),('swap_percent','REAL DEFAULT 0'),('load1','REAL DEFAULT 0'),('load5','REAL DEFAULT 0'),('load15','REAL DEFAULT 0')]: ensure_col(c,'server_metrics',col,d)
+    for col,d in [('swap_total','INTEGER DEFAULT 0'),('swap_used','INTEGER DEFAULT 0'),('swap_percent','REAL DEFAULT 0'),('load1','REAL DEFAULT 0'),('load5','REAL DEFAULT 0'),('load15','REAL DEFAULT 0'),('load1','REAL DEFAULT 0'),('load5','REAL DEFAULT 0'),('load15','REAL DEFAULT 0')]: ensure_col(c,'server_metrics',col,d)
     c.execute("""CREATE TABLE IF NOT EXISTS metric_alert_state(server_id INTEGER,metric TEXT,active INTEGER DEFAULT 0,last_value REAL DEFAULT 0,threshold REAL DEFAULT 0,last_sent_at TEXT DEFAULT '',PRIMARY KEY(server_id,metric))""")
     c.execute("""CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT DEFAULT '',title TEXT DEFAULT '',content TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
     c.execute("""CREATE TABLE IF NOT EXISTS reminders(server_id INTEGER,remind_key TEXT,sent_at TEXT,PRIMARY KEY(server_id,remind_key))""")
@@ -643,7 +643,9 @@ def display_price_expire(row):
 
 
 
-# ===== FULLCHAIN REALTIME METRICS PATCH =====
+
+
+# ===== FINAL FULL LINK REALTIME PATCH =====
 def metric_config_html(m):
     m=m or {}
     def iv(v):
@@ -654,12 +656,6 @@ def metric_config_html(m):
     swap=iv(m.get('swap_total'))
     disk=iv(m.get('disk_total'))
     return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt(mem) if mem else '未知'} ｜ 🔄 {fmt(swap) if swap else '无'} ｜ 💾 {fmt(disk) if disk else '未知'}"
-
-def metric_is_fresh(m, max_age=20):
-    try:
-        return (datetime.now()-pdt((m or {}).get('updated_at'))).total_seconds() <= max_age
-    except Exception:
-        return False
 
 def _float(v):
     try: return float(v or 0)
@@ -683,17 +679,11 @@ def metric_json(x):
         down_speed=max(0, int((rx-old.get('rx',rx))/dt))
         up_speed=max(0, int((tx-old.get('tx',tx))/dt))
     METRIC_RATE_CACHE[sid]={'rx':rx,'tx':tx,'ts':ts}
-    fresh_now=metric_is_fresh(m,20)
     return {
         'id':sid,
         'name':x.get('name') or '',
-        'host':x.get('host') or '',
-        'metric_name':m.get('name') or '',
-        'hostname':m.get('hostname') or '',
-        'public_ip':m.get('public_ip') or '',
         'online':bool(x.get('online')),
         'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知',
-        'fresh':fresh_now,
         'uptime':dur(m.get('uptime_seconds') or 0),
         'cpu':_float(m.get('cpu_percent')),
         'mem':_float(m.get('mem_percent')),
@@ -718,9 +708,8 @@ def metric_json(x):
         'net_speed_html':f"↑ {fmt(up_speed)}/s&nbsp;&nbsp;↓ {fmt(down_speed)}/s",
         'traffic_html':f"↑ {fmt(tx)}&nbsp;&nbsp;↓ {fmt(rx)}",
         'load_html':f"{_float(m.get('load1')):.2f} ｜ {_float(m.get('load5')):.2f} ｜ {_float(m.get('load15')):.2f}",
-        'source_html':f"📡 数据源：{html.escape(str(m.get('hostname') or m.get('name') or '未知'))} ｜ 更新时间：{html.escape(str(m.get('updated_at') or '未知'))}",
     }
-# ===== END FULLCHAIN REALTIME METRICS PATCH =====
+# ===== END FINAL FULL LINK REALTIME PATCH =====
 
 LOGIN='''<!doctype html><html><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>登录</title><link id="favLink" rel="icon" href="/favicon.ico?v=login"><style>
 :root{--text:#edf5ff;--muted:#9fb0c7;--line:#ffffff28;--glass:#ffffff16;--glass2:#ffffff28;--a:#6ee7ff;--b:#a78bfa;--shadow:#0008}
@@ -843,6 +832,58 @@ html.light .muted,html.light .small,html.light .label,html.light .table th{color
 @keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
 @media(max-width:760px){.metric-extra{grid-template-columns:1fr}}
 
+
+/* readability contrast fix */
+html:not(.light) body,
+html:not(.light) .card,
+html:not(.light) .table td,
+html:not(.light) .badge,
+html:not(.light) .small,
+html:not(.light) .muted,
+html:not(.light) .metric-extra .mini,
+html:not(.light) .metric-extra .mini b{
+  color:#f8fbff!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.75)!important;
+}
+html:not(.light) .card{
+  background:linear-gradient(180deg,rgba(25,38,55,.72),rgba(18,30,45,.62))!important;
+  border-color:rgba(255,255,255,.24)!important;
+}
+html:not(.light) .metric-extra .mini,
+html:not(.light) .badge{
+  background:rgba(15,25,38,.55)!important;
+}
+html:not(.light) .progress{
+  background:rgba(255,255,255,.15)!important;
+}
+html.light body,
+html.light .card,
+html.light .table td,
+html.light .badge,
+html.light .small,
+html.light .muted,
+html.light .metric-extra .mini,
+html.light .metric-extra .mini b{
+  text-shadow:none!important;
+}
+.servercard,.card{font-weight:850}
+.metric-extra .mini{min-height:58px}
+.metric-extra .mini b{opacity:.88}
+
+
+/* final overview readability + realtime */
+.metric-extra{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.metric-extra .mini{border:1px solid var(--line);background:rgba(15,25,38,.50);border-radius:13px;padding:7px 9px;font-size:12px;line-height:1.55;font-weight:850;color:#f8fbff;text-shadow:0 1px 3px rgba(0,0,0,.65)}
+.metric-extra .mini b{display:block;color:#eaf3ff;font-size:12px;margin-bottom:2px;opacity:.95}
+html.light .metric-extra .mini{background:rgba(255,255,255,.78);color:#0f172a;text-shadow:none}
+html.light .metric-extra .mini b{color:#334155}
+.bar{transition:width .75s cubic-bezier(.22,.61,.36,1),background .2s ease!important;position:relative;overflow:hidden}
+.bar:after{content:"";position:absolute;top:0;bottom:0;width:45%;left:-55%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.42),transparent);animation:barFlow 1.4s linear infinite}
+@keyframes barFlow{to{left:110%}}
+.server-title .dot.online{animation:dotPulse 1.45s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
+@media(max-width:760px){.metric-extra{grid-template-columns:1fr}}
+
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
 
@@ -949,7 +990,6 @@ function paintServer(s){
   setHtml('[data-netspeed="'+s.id+'"]',s.net_speed_html||'↑ 0B/s&nbsp;&nbsp;↓ 0B/s');
   setHtml('[data-traffic="'+s.id+'"]',s.traffic_html||'↑ 0B&nbsp;&nbsp;↓ 0B');
   setHtml('[data-load="'+s.id+'"]',s.load_html||'0.00 ｜ 0.00 ｜ 0.00');
-  setHtml('[data-source="'+s.id+'"]',s.source_html||'');
   setText('[data-cpucores="'+s.id+'"]',(s.cpu_cores||'?')+' Cores');
   setText('[data-memused="'+s.id+'"]',fmtBytes(s.mem_used));
   setText('[data-memtotal="'+s.id+'"]',fmtBytes(s.mem_total));
