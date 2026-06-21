@@ -200,8 +200,10 @@ def main():
                 "report ok",
                 time.strftime("%F %T"),
                 "sid", SID,
-                "uptime", data.get("uptime_seconds"),
-                "cpu_cores", data.get("cpu_cores"), "swap", data.get("swap_percent"),
+                "cpu", data.get("cpu_percent"),
+                "mem", data.get("mem_percent"),
+                "swap", data.get("swap_percent"),
+                "disk", data.get("disk_percent"),
                 flush=True
             )
         except Exception as e:
@@ -240,8 +242,7 @@ systemctl enable --now "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
 echo "✅ 探针安装/更新完成"
-echo "📌 新版探针为静默上报，不会再推送“探针已启动”到 TG"
-echo "📌 离线/恢复在线通知由主机器人统一推送"
+echo "📌 新版探针为静默上报，不会推送启动消息到 TG"
+echo "📌 默认每 ${INTERVAL} 秒上报 CPU/内存/SWAP/硬盘/流量/运行时长"
 echo "📌 查看状态：systemctl status $SERVICE_NAME --no-pager -l"
-echo "📌 默认每 30 秒上报一次 CPU/内存/硬盘/流量/运行时长"
 echo "📌 查看日志：journalctl -u $SERVICE_NAME -f"
