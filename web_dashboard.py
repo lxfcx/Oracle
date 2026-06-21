@@ -153,6 +153,18 @@ def vhost(v):
     return v
 
 def passok(p): return check_password_hash(WEB_PASSWORD_HASH,p) if WEB_PASSWORD_HASH else (bool(WEB_PASSWORD) and p==WEB_PASSWORD)
+
+def local_or_login(fn):
+    @wraps(fn)
+    def w(*a, **kw):
+        ip = request.remote_addr or ''
+        if ip in ('127.0.0.1', '::1', 'localhost'):
+            return fn(*a, **kw)
+        if not session.get('ok'):
+            return redirect(url_for('login', next=request.path))
+        return fn(*a, **kw)
+    return w
+
 def login_required(fn):
     @wraps(fn)
     def w(*a,**kw):
@@ -463,7 +475,7 @@ def settings_page():
     return render('settings',SETTINGS,web_user=WEB_USERNAME,bot_token=BOT_TOKEN,admin_ids=','.join(ADMIN_IDS) if 'ADMIN_IDS' in globals() and isinstance(ADMIN_IDS,list) else os.getenv('ADMIN_IDS',''),has_bg=bool(theme_bg_exists()),theme_css=active_theme_css())
 
 @app.route('/api/local-live')
-@login_required
+@local_or_login
 def api_local_live():
     resp=jsonify(_local_live_json())
     resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
@@ -1145,37 +1157,6 @@ function apply(){let theme=localStorage.getItem('theme')||'dark', glass=localSto
 function toggleTheme(){localStorage.setItem('theme',(localStorage.getItem('theme')||'dark')==='dark'?'light':'dark');apply()}
 function toggleGlass(){localStorage.setItem('glass',(localStorage.getItem('glass')||'glass')==='glass'?'solid':'glass');apply()}
 document.addEventListener('DOMContentLoaded',()=>{apply();fetch('/site-meta').then(r=>r.json()).then(j=>{document.title=(j.site_name||'服务器监控')+' 登录';let a=document.getElementById('loginTitle'),b=document.getElementById('loginSub');if(a)a.textContent='🛡️✨ '+(j.site_name||'服务器监控')+' 登录';if(b)b.textContent='服务器监控 Web 控制台';}).catch(()=>{});})
-
-function setLocalText(sel,txt){document.querySelectorAll(sel).forEach(e=>e.textContent=txt)}
-function setLocalHtml(sel,txt){document.querySelectorAll(sel).forEach(e=>e.innerHTML=txt)}
-function setLocalBar(sel,val){
-  let v=Number(val||0);
-  document.querySelectorAll(sel).forEach(e=>{
-    e.style.width=Math.max(0,Math.min(100,v))+'%';
-    e.classList.toggle('bad',v>=80);
-    e.classList.toggle('warn',v>=50&&v<80);
-  });
-}
-async function localLive(){
-  if(!document.querySelector('[data-local-cpu]')) return;
-  try{
-    let r=await fetch('/api/local-live?t='+Date.now(),{cache:'no-store'});
-    let j=await r.json();
-    setLocalBar('[data-local-cpu]',j.cpu); setLocalText('[data-local-cputxt]',Math.round(j.cpu||0)+'%');
-    setLocalBar('[data-local-mem]',j.mem); setLocalText('[data-local-memtxt]',Math.round(j.mem||0)+'%');
-    setLocalBar('[data-local-swap]',j.swap); setLocalText('[data-local-swaptxt]',Math.round(j.swap||0)+'%');
-    setLocalBar('[data-local-disk]',j.disk); setLocalText('[data-local-disktxt]',Math.round(j.disk||0)+'%');
-    setLocalText('[data-local-memused]',fmtBytes(j.mem_used)); setLocalText('[data-local-memtotal]',fmtBytes(j.mem_total));
-    setLocalText('[data-local-swapused]',fmtBytes(j.swap_used)); setLocalText('[data-local-swaptotal]',j.swap_total?fmtBytes(j.swap_total):'无');
-    setLocalText('[data-local-diskused]',fmtBytes(j.disk_used)); setLocalText('[data-local-disktotal]',fmtBytes(j.disk_total));
-    setLocalHtml('[data-local-netspeed]',j.net_speed_html||'↑ 0B/s&nbsp;&nbsp;↓ 0B/s');
-    setLocalHtml('[data-local-traffic]',j.traffic_html||'↑ 0B&nbsp;&nbsp;↓ 0B');
-    setLocalHtml('[data-local-load]',j.load_html||'0.00 ｜ 0.00 ｜ 0.00');
-    setLocalText('[data-local-uptime]',j.uptime||'未知');
-  }catch(e){}
-}
-setInterval(localLive,1000);
-localLive();
 
 </script></head><body><script>let __bgv=Date.now();document.body.style.setProperty('--custom-bg',"url('/theme-bg?v="+__bgv+"')");fetch('/theme-bg?v='+__bgv,{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg','login-bg')}).catch(()=>{});</script><form class=card method=post><h1 id="loginTitle">🛡️✨ Web 面板登录</h1><div class=sub id="loginSub">服务器监控 星空磨砂玻璃控制台</div><div class=controls><button type=button class=ctl onclick=toggleTheme()><span id=themeText>🌙 当前：夜间星空</span></button><button type=button class=ctl onclick=toggleGlass()><span id=glassText>🧊 当前：透明玻璃</span></button></div>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}<input name=username placeholder=账号 required><input name=password type=password placeholder=密码 required><button class=loginbtn>🚀 登录控制台</button><div class=tip>登录后可查看大屏统计、服务器资源、国旗地区、探针、阈值告警、事件记录。</div></form>
 <script>
@@ -1879,10 +1860,52 @@ document.addEventListener('DOMContentLoaded',()=>{
   setInterval(refreshKpi,3000);
 });
 
+
+function setLocalText(sel,txt){document.querySelectorAll(sel).forEach(e=>e.textContent=txt)}
+function setLocalHtml(sel,txt){document.querySelectorAll(sel).forEach(e=>e.innerHTML=txt)}
+function setLocalBar(sel,val){
+  let v=Number(val||0);
+  document.querySelectorAll(sel).forEach(e=>{
+    e.style.width=Math.max(0,Math.min(100,v))+'%';
+    e.classList.toggle('bad',v>=80);
+    e.classList.toggle('warn',v>=50&&v<80);
+  });
+}
+async function localLive(){
+  if(!document.querySelector('[data-localcpu],[data-localmem],[data-localswap],[data-localdisk],[data-local-netspeed]')) return;
+  try{
+    let r=await fetch('/api/local-live?t='+Date.now(),{cache:'no-store',headers:{'Cache-Control':'no-cache'}});
+    let j=await r.json();
+
+    setLocalBar('[data-localcpu]',j.cpu);
+    setLocalText('[data-localcputxt]',Math.round(j.cpu||0)+'%');
+
+    setLocalBar('[data-localmem]',j.mem);
+    setLocalText('[data-localmemtxt]',Math.round(j.mem||0)+'%');
+
+    setLocalBar('[data-localswap]',j.swap);
+    setLocalText('[data-localswaptxt]',Math.round(j.swap||0)+'%');
+
+    setLocalBar('[data-localdisk]',j.disk);
+    setLocalText('[data-localdisktxt]',Math.round(j.disk||0)+'%');
+
+    setLocalHtml('[data-local-netspeed]',j.net_speed_html||'↑ 0B/s&nbsp;&nbsp;↓ 0B/s');
+    setLocalHtml('[data-local-traffic]',j.traffic_html||'↑ 0B&nbsp;&nbsp;↓ 0B');
+    setLocalHtml('[data-local-load]',j.load_html||'0.00 ｜ 0.00 ｜ 0.00');
+    setLocalText('[data-local-uptime]',j.uptime||'未知');
+  }catch(e){}
+}
+setInterval(localLive,1000);
+localLive();
+
 </script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>{{site_name_value()}}</b></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>🌙 当前：夜间星空</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>🧊 当前：透明玻璃</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
 DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div>
 <div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value data-kpi=total>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok" data-kpi=online>{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad" data-kpi=offline>{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针在线</div><div class=value data-kpi=probes>{{data.probes}}</div></div></div>
-<div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('SWAP',0,'localswap',local.swap_percent or 0,80)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}</div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
+<div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ <span data-local-uptime>{{local.uptime or '未知'}}</span></span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('SWAP',0,'localswap',local.swap_percent or 0,80)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}<div class="metric-extra" style="margin-top:14px">
+  <div class="mini"><b>网络</b><span data-local-netspeed>↑ 0B/s&nbsp;&nbsp;↓ 0B/s</span></div>
+  <div class="mini"><b>流量</b><span data-local-traffic>↑ 0B&nbsp;&nbsp;↓ 0B</span></div>
+  <div class="mini"><b>负载</b><span data-local-load>0.00 ｜ 0.00 ｜ 0.00</span></div>
+</div></div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
 <div class=card style="margin-top:16px"><h2>🖥️ 所有服务器</h2>
 <div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}
 <div class="card servercard"><h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><div class="metric-extra"><div class="mini"><b>网络</b><span data-netspeed="{{s.id}}">↑ 0B/s&nbsp;&nbsp;↓ 0B/s</span></div><div class="mini"><b>流量</b><span data-traffic="{{s.id}}">↑ 0B&nbsp;&nbsp;↓ 0B</span></div><div class="mini"><b>负载</b><span data-load="{{s.id}}">0.00 ｜ 0.00 ｜ 0.00</span></div></div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
