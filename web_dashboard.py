@@ -438,6 +438,8 @@ def api_servers_live():
     ss=all_servers()
     resp=jsonify({'time':now(),'servers':[metric_json(x) for x in ss]})
     resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma']='no-cache'
+    resp.headers['Expires']='0'
     return resp
 # ===== END WEB V3 FIX HELPERS =====
 
@@ -757,39 +759,32 @@ html.light .muted,html.light .small,html.light .label,html.light .table th{color
 
 
 
-/* sidebar collapse patch */
-.side-toggle{position:absolute;right:-16px;top:20px;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,var(--blue),var(--purple));color:#07111f;border:0;box-shadow:0 8px 26px var(--shadow);z-index:5}
-.layout.nav-collapsed{grid-template-columns:88px 1fr}
-.layout.nav-collapsed .side{padding:18px 12px}
-.layout.nav-collapsed .brand{justify-content:center}
-.layout.nav-collapsed .brand b,.layout.nav-collapsed .side .small,.layout.nav-collapsed .switches{display:none!important}
-.layout.nav-collapsed .brand .ico{width:52px;height:52px}
-.layout.nav-collapsed .nav a{justify-content:center;font-size:0;padding:14px 8px;white-space:nowrap;overflow:hidden}
-.layout.nav-collapsed .nav a::first-letter{font-size:22px}
-@media(max-width:1100px){.side-toggle{display:none}.layout.nav-collapsed{grid-template-columns:1fr}.layout.nav-collapsed .side .small,.layout.nav-collapsed .switches,.layout.nav-collapsed .brand b{display:block!important}.layout.nav-collapsed .nav a{font-size:inherit;justify-content:flex-start}}
+
+/* realtime komari-like refresh patch */
+.bar{transition:width .85s cubic-bezier(.22,.61,.36,1), background .25s ease!important;position:relative;overflow:hidden}
+.bar:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);transform:translateX(-120%);animation:barShine 1.8s linear infinite}
+@keyframes barShine{to{transform:translateX(120%)}}
+.server-title .dot.online{animation:livePulse 1.6s ease-in-out infinite}
+@keyframes livePulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
+.live-updated{font-size:12px;color:var(--muted);font-weight:850;margin-top:6px}
+.realtime-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 8px;font-size:12px;font-weight:900;color:var(--muted)}
+
+.layout.{grid-template-columns:1fr}.layout. .side .small,.layout. .switches,.layout. .brand b{display:block!important}.layout. .nav a{font-size:inherit;justify-content:flex-start}}
+
+
+/* realtime komari-like refresh patch */
+.bar{transition:width .85s cubic-bezier(.22,.61,.36,1), background .25s ease!important;position:relative;overflow:hidden}
+.bar:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);transform:translateX(-120%);animation:barShine 1.8s linear infinite}
+@keyframes barShine{to{transform:translateX(120%)}}
+.server-title .dot.online{animation:livePulse 1.6s ease-in-out infinite}
+@keyframes livePulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
+.live-updated{font-size:12px;color:var(--muted);font-weight:850;margin-top:6px}
+.realtime-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 8px;font-size:12px;font-weight:900;color:var(--muted)}
 
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
 
 
-
-function toggleSidebar(){
-  let layout=document.querySelector('.layout');
-  if(!layout)return;
-  let yes=!layout.classList.contains('nav-collapsed');
-  layout.classList.toggle('nav-collapsed',yes);
-  localStorage.setItem('navCollapsed',yes?'1':'0');
-  let b=document.getElementById('sideToggle');
-  if(b)b.textContent=yes?'❯':'❮';
-}
-function initSidebar(){
-  let layout=document.querySelector('.layout');
-  if(!layout)return;
-  let yes=localStorage.getItem('navCollapsed')==='1';
-  layout.classList.toggle('nav-collapsed',yes);
-  let b=document.getElementById('sideToggle');
-  if(b)b.textContent=yes?'❯':'❮';
-}
 
 function applyTheme(){
   let theme=localStorage.getItem('theme')||'dark';
@@ -863,32 +858,50 @@ function showToast(msg){
 }
 function fmtBytes(n){n=Number(n||0);if(!n)return '0B';let u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return n.toFixed(1)+u[i];}
 function fmtBytes(n){n=Number(n||0);if(!n)return '0B';let u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return n.toFixed(1)+u[i];}
+function fmtBytes(n){
+  n=Number(n||0);
+  if(!n)return '0B';
+  let u=['B','KB','MB','GB','TB','PB'];
+  let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++;}
+  return n.toFixed(1)+u[i];
+}
+function setText(sel,txt){document.querySelectorAll(sel).forEach(e=>e.textContent=txt);}
+function setHtml(sel,html){document.querySelectorAll(sel).forEach(e=>e.innerHTML=html);}
+function setBar(id,k,v){
+  document.querySelectorAll('[data-'+k+'="'+id+'"]').forEach(e=>{
+    v=Number(v||0);
+    e.style.width=Math.max(0,Math.min(100,v))+'%';
+    e.classList.toggle('bad',v>=80);
+    e.classList.toggle('warn',v>=50&&v<80);
+  });
+  setText('[data-'+k+'txt="'+id+'"]',Math.round(Number(v||0))+'%');
+}
 async function live(){
   try{
     let j=await(await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store'})).json();
     (j.servers||[]).forEach(s=>{
-      ['cpu','mem','swap','disk'].forEach(k=>{
-        let v=Number(s[k]||0);
-        document.querySelectorAll('[data-'+k+'="'+s.id+'"]').forEach(e=>{
-          e.style.width=Math.max(0,Math.min(100,v))+'%';
-          e.classList.toggle('bad',v>=80);
-          e.classList.toggle('warn',v>=50&&v<80);
-        });
-        document.querySelectorAll('[data-'+k+'txt="'+s.id+'"]').forEach(e=>e.textContent=Math.round(v)+'%');
+      setBar(s.id,'cpu',s.cpu);
+      setBar(s.id,'mem',s.mem);
+      setBar(s.id,'swap',s.swap);
+      setBar(s.id,'disk',s.disk);
+      setText('[data-uptime="'+s.id+'"]',s.uptime||'未知');
+      setText('[data-status="'+s.id+'"]',(s.online?'🟢 ':'🔴 ')+(s.status||'未知'));
+      setHtml('[data-hw="'+s.id+'"]',s.config_html||'');
+      setText('[data-cpucores="'+s.id+'"]',(s.cpu_cores||'?')+' Cores');
+      setText('[data-memused="'+s.id+'"]',fmtBytes(s.mem_used));
+      setText('[data-memtotal="'+s.id+'"]',fmtBytes(s.mem_total));
+      setText('[data-swapused="'+s.id+'"]',fmtBytes(s.swap_used));
+      setText('[data-swaptotal="'+s.id+'"]',s.swap_total?fmtBytes(s.swap_total):'无');
+      setText('[data-diskused="'+s.id+'"]',fmtBytes(s.disk_used));
+      setText('[data-disktotal="'+s.id+'"]',fmtBytes(s.disk_total));
+      setText('[data-updated="'+s.id+'"]',s.updated_at||'未知');
+      document.querySelectorAll('[data-live-dot="'+s.id+'"]').forEach(e=>{
+        e.classList.toggle('online',!!s.online);
+        e.classList.toggle('offline',!s.online);
       });
-      document.querySelectorAll('[data-uptime="'+s.id+'"]').forEach(e=>e.textContent=s.uptime||'未知');
-      document.querySelectorAll('[data-status="'+s.id+'"]').forEach(e=>e.textContent=(s.online?'🟢 ':'🔴 ')+(s.status||'未知'));
-      document.querySelectorAll('[data-hw="'+s.id+'"]').forEach(e=>e.innerHTML=s.config_html||e.innerHTML);
-      document.querySelectorAll('[data-cpucores="'+s.id+'"]').forEach(e=>e.textContent=(s.cpu_cores||'?')+' Cores');
-      document.querySelectorAll('[data-memused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.mem_used));
-      document.querySelectorAll('[data-memtotal="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.mem_total));
-      document.querySelectorAll('[data-swapused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.swap_used));
-      document.querySelectorAll('[data-swaptotal="'+s.id+'"]').forEach(e=>e.textContent=s.swap_total?fmtBytes(s.swap_total):'无');
-      document.querySelectorAll('[data-diskused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.disk_used));
-      document.querySelectorAll('[data-disktotal="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.disk_total));
-      document.querySelectorAll('[data-updated="'+s.id+'"]').forEach(e=>e.textContent=s.updated_at||'未知');
     });
-  }catch(e){console.log('live refresh failed',e);}
+  }catch(e){}
 }
 async function refreshKpi(){
   try{
@@ -904,21 +917,20 @@ async function refreshKpi(){
 function delok(){return confirm('确认删除服务器？');}
 document.addEventListener('DOMContentLoaded',()=>{
   applyTheme();
-  initSidebar();
   initView();
   live();
   refreshKpi();
-  setInterval(live,3000);
-  setInterval(refreshKpi,5000);
+  setInterval(live,1000);
+  setInterval(refreshKpi,3000);
 });
 
-</script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><button id="sideToggle" class="side-toggle" type="button" onclick="toggleSidebar()">❮</button><div class=brand><div class=ico>🛡️</div><div><b>{{site_name}}</b></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
+</script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>{{site_name}}</b></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
 DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div>
 <div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value data-kpi=total>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok" data-kpi=online>{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad" data-kpi=offline>{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针在线</div><div class=value data-kpi=probes>{{data.probes}}</div></div></div>
 <div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('SWAP',0,'localswap',local.swap_percent or 0,80)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}</div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
 <div class=card style="margin-top:16px"><h2>🖥️ 所有服务器</h2>
 <div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}
-<div class="card servercard"><h3 class="server-title"><span class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
+<div class="card servercard"><h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
 {% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>
 <div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态/在线时长</th><th>资源进度</th><th>费用/到期</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=5>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>
 <div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td class="event-content">{{clean_event_html(e.content)|safe}}{% set ctx=event_context(e) %}{% if ctx %}<div class="event-context">{{ctx|safe}}</div>{% endif %}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>'''
@@ -929,7 +941,7 @@ SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><bu
 <div data-view-card class=cardgrid>
 {% for s in data.servers %}{% set m=s.metrics %}
 <div class="card servercard">
-<h3 class="server-title"><span class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3>
+<h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3>
 <div class=meta><span class=badge>#{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div>
 <div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div>
