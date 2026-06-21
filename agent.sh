@@ -8,7 +8,7 @@ URL=""
 SECRET=""
 SID=""
 NAME="server"
-INTERVAL="30"
+INTERVAL="5"
 
 # 兼容旧命令参数：--token / --chat 会被接收但不会使用，避免探针自己发 TG 消息。
 while [ $# -gt 0 ]; do
@@ -49,7 +49,7 @@ URL = os.environ.get("AGENT_URL", "")
 SECRET = os.environ.get("AGENT_SECRET", "")
 SID = os.environ.get("SERVER_ID", "")
 NAME = os.environ.get("SERVER_NAME", "server")
-INTERVAL = int(os.environ.get("INTERVAL", "30"))
+INTERVAL = int(os.environ.get("INTERVAL", "5"))
 
 def sh(cmd):
     try:
@@ -84,6 +84,20 @@ def mem_info():
         total = data.get("MemTotal", 0)
         avail = data.get("MemAvailable", 0)
         used = max(0, total - avail)
+        percent = round(used * 100 / total, 1) if total else 0
+        return total, used, percent
+    except Exception:
+        return 0, 0, 0
+
+def swap_info():
+    try:
+        data = {}
+        for line in open("/proc/meminfo"):
+            k, v = line.split(":", 1)
+            data[k] = int(v.strip().split()[0]) * 1024
+        total = data.get("SwapTotal", 0)
+        free = data.get("SwapFree", 0)
+        used = max(0, total - free)
         percent = round(used * 100 / total, 1) if total else 0
         return total, used, percent
     except Exception:
@@ -150,6 +164,7 @@ def collect():
     up = uptime_seconds()
     rx, tx = net_bytes()
     mem_total, mem_used, mem_percent = mem_info()
+    swap_total, swap_used, swap_percent = swap_info()
     disk_total, disk_used, disk_percent = disk_info()
     return {
         "secret": SECRET,
@@ -164,6 +179,9 @@ def collect():
         "mem_total": mem_total,
         "mem_used": mem_used,
         "mem_percent": mem_percent,
+        "swap_total": swap_total,
+        "swap_used": swap_used,
+        "swap_percent": swap_percent,
         "disk_total": disk_total,
         "disk_used": disk_used,
         "disk_percent": disk_percent,
@@ -183,7 +201,7 @@ def main():
                 time.strftime("%F %T"),
                 "sid", SID,
                 "uptime", data.get("uptime_seconds"),
-                "cpu_cores", data.get("cpu_cores"),
+                "cpu_cores", data.get("cpu_cores"), "swap", data.get("swap_percent"),
                 flush=True
             )
         except Exception as e:
