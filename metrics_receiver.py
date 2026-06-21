@@ -26,7 +26,29 @@ load_env(f"{APP_DIR}/.env")
 load_env(f"{APP_DIR}/.env.web")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-METRICS_SECRET = os.getenv("METRICS_SECRET") or (BOT_TOKEN[-16:] if BOT_TOKEN else "server-monitor-secret")
+METRICS_SECRET = os.getenv("METRICS_SECRET") or os.getenv("AGENT_SECRET") or (BOT_TOKEN[-16:] if BOT_TOKEN else "server-monitor-secret")
+
+
+def valid_secret(got):
+    got = str(got or "").strip()
+    candidates = set()
+    for v in [
+        os.getenv("METRICS_SECRET", ""),
+        os.getenv("AGENT_SECRET", ""),
+        os.getenv("BOT_TOKEN", ""),
+        (os.getenv("BOT_TOKEN", "")[-16:] if os.getenv("BOT_TOKEN", "") else ""),
+        METRICS_SECRET,
+    ]:
+        v = str(v or "").strip()
+        if v:
+            candidates.add(v)
+    if os.getenv("METRICS_ALLOW_ANY_SECRET", "0") == "1":
+        return True
+    return bool(got and got in candidates)
+
+def normalize_os_name(payload):
+    v = str(payload.get("os_name") or payload.get("os") or "").strip()
+    return v[:120]
 
 def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -219,7 +241,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0") or "0")
             payload = json.loads(self.rfile.read(length).decode("utf-8", errors="ignore") or "{}")
-            if str(payload.get("secret") or "") != str(METRICS_SECRET):
+            if not valid_secret(payload.get("secret")):
+                print(f"[metrics] bad secret from {self.client_address[0]} sid={payload.get('server_id')} got_tail={str(payload.get('secret') or '')[-4:]}", flush=True)
                 self.send_json(403, {"ok": False, "error": "bad secret"})
                 return
             updated_at = save_metrics(payload)
@@ -229,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    print(f"server-monitor-metrics listening on 0.0.0.0:{METRICS_PORT}", flush=True)
+    print(f"server-monitor-metrics listening on 0.0.0.0:{METRICS_PORT}, secret_tail={str(METRICS_SECRET)[-4:]}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", METRICS_PORT), Handler).serve_forever()
 
 if __name__ == "__main__":
