@@ -276,7 +276,7 @@ def add_server():
             name=request.form.get('name','').strip(); host=vhost(request.form.get('host',''))
             if not name: raise ValueError('名称不能为空')
             port=int(request.form.get('check_port') or 22); meta=detect(host); free=1 if request.form.get('free_forever')=='on' else 0; auto=1 if request.form.get('auto_renew')=='on' else 0
-            expire='永久' if free else request.form.get('expire_at','').strip(); price=0 if free else float(request.form.get('price') or 0)
+            expire='永久' if free else normalize_datetime_value(request.form.get('expire_at','')).strip(); price=0 if free else float(request.form.get('price') or 0)
             reset_seq(); c=db()
             try:
                 c.execute('''INSERT INTO servers(name,host,note,cycle,price,currency,expire_at,check_port,country,country_code,region,city,isp,os_name,last_meta_at,free_forever,auto_renew,cpu_alert,mem_alert,disk_alert) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(name,host,request.form.get('note','').strip(),ncycle(request.form.get('cycle','monthly')),price,ncur(request.form.get('currency','USD')),expire,port,meta['country'],meta['country_code'],meta['region'],meta['city'],meta['isp'],request.form.get('os_name','').strip(),now(),free,auto,float(request.form.get('cpu_alert') or 90),float(request.form.get('mem_alert') or 90),float(request.form.get('disk_alert') or 90)))
@@ -302,7 +302,7 @@ def edit_server(sid):
             name=request.form.get('name','').strip(); host=vhost(request.form.get('host',''))
             if not name: raise ValueError('名称不能为空')
             port=int(request.form.get('check_port') or 22); free=1 if request.form.get('free_forever')=='on' else 0; auto=1 if request.form.get('auto_renew')=='on' else 0
-            expire='永久' if free else request.form.get('expire_at','').strip(); price=0 if free else float(request.form.get('price') or 0)
+            expire='永久' if free else normalize_datetime_value(request.form.get('expire_at','')).strip(); price=0 if free else float(request.form.get('price') or 0)
             meta=detect(host) if host!=s.get('host') else {'country':s.get('country',''),'country_code':s.get('country_code',''),'region':s.get('region',''),'city':s.get('city',''),'isp':s.get('isp','')}
             c=db()
             try:
@@ -792,6 +792,53 @@ def admin_ids_value():
     return get_setting('admin_ids', os.getenv('ADMIN_IDS',''))
 # ===== END SETTINGS PERSISTENCE PATCH =====
 
+
+# ===== OS DISPLAY AND DATETIME PICKER PATCH =====
+def datetime_input_value(v):
+    v=str(v or '').strip()
+    if not v:
+        return ''
+    v=v.replace(' ', 'T')
+    # datetime-local wants YYYY-MM-DDTHH:MM, date-only is also okay but normalize to T00:00
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', v):
+        return v + 'T00:00'
+    if re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}', v):
+        return v[:16]
+    return v[:16]
+
+def normalize_datetime_value(v):
+    v=str(v or '').strip()
+    if not v:
+        return ''
+    v=v.replace('T', ' ')
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', v):
+        return v + ' 00:00'
+    if re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}', v):
+        return v[:16]
+    return v
+
+def probe_os_name_for_server(s):
+    try:
+        manual=str((s.get('os_name') if hasattr(s,'get') else s.os_name) or '').strip()
+        if manual and manual not in ('未知','未知系统'):
+            return manual
+        sid=(s.get('id') if hasattr(s,'get') else s.id)
+        c=db()
+        try:
+            r=c.execute("SELECT raw FROM server_metrics WHERE server_id=?", (sid,)).fetchone()
+        finally:
+            c.close()
+        if r and r[0]:
+            import json
+            data=json.loads(r[0])
+            v=str(data.get('os_name') or data.get('os') or '').strip()
+            if v:
+                return v
+    except Exception:
+        pass
+    return ''
+# ===== END OS DISPLAY AND DATETIME PICKER PATCH =====
+
 LOGIN='''<!doctype html><html><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>登录</title><link id="favLink" rel="icon" href="/favicon.ico?v=login"><style>
 :root{--text:#edf5ff;--muted:#9fb0c7;--line:#ffffff28;--glass:#ffffff16;--glass2:#ffffff28;--a:#6ee7ff;--b:#a78bfa;--shadow:#0008}
 body.light{--text:#0f172a;--muted:#475569;--line:#0f172a22;--glass:#ffffff55;--glass2:#ffffff88;--shadow:#64748b44}
@@ -951,6 +998,25 @@ html.light input[type="date"]::-webkit-calendar-picker-indicator {
   filter: none;
 }
 /* ===== end date picker and os hint patch ===== */
+
+
+/* ===== datetime picker visual patch ===== */
+input[type="datetime-local"] {
+  color-scheme: dark;
+  cursor: pointer;
+}
+html.light input[type="datetime-local"] {
+  color-scheme: light;
+}
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: .96;
+  filter: invert(1) drop-shadow(0 1px 2px rgba(0,0,0,.35));
+}
+html.light input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: none;
+}
+/* ===== end datetime picker visual patch ===== */
 
 </style><script>
 function apply(){let theme=localStorage.getItem('theme')||'dark', glass=localStorage.getItem('glass')||'glass';document.body.classList.toggle('light',theme==='light');document.body.classList.toggle('solid',glass==='solid');let a=document.getElementById('themeText'),b=document.getElementById('glassText');if(a)a.textContent=theme==='light'?'☀️ 当前：日间明亮':'🌙 当前：夜间星空';if(b)b.textContent=glass==='solid'?'⬛ 当前：实色背景':'🧊 当前：透明玻璃'}
@@ -1698,8 +1764,8 @@ SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><bu
 </div></div>'''
 
 DETAIL='''<div class=top><h1>🖥️ {{flag_icon(s)|safe}} {{s.name}}</h1><div class=btns><a class=btn href="/servers">📋 返回</a><a class="btn primary" href="/servers/{{s.id}}/edit">✏️ 编辑</a></div></div>{% set m=s.metrics %}<div class=grid3><div class="card kpi"><div class=label>📡 状态</div><div class="value {{'ok' if s.status.last_status=='online' else 'bad' if s.status.last_status=='offline' else ''}}">{{'🟢 在线' if s.status.last_status=='online' else '🔴 离线' if s.status.last_status=='offline' else '⚪ 未知'}}</div><div class=small>{{s.status.last_checked_at or '未知'}}</div></div><div class="card kpi"><div class=label>⏱️ 运行时长</div><div class=value><span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span></div><div class=small>开机：{{m.boot_time or '未知'}}</div></div><div class="card kpi"><div class=label>⏰ 到期</div><div class=value style="font-size:22px">{{expire_text(s.expire_at,s.free_forever)}}</div><div class=small>{{price_text(s)}}｜{{cycle_cn(s.cycle)}}</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>⚙️ 服务器配置</h2><p><span class=badge>🆔 ID {{s.id}}</span> <span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></p><p>🌐 主机：<code>{{s.host}}:{{s.check_port}}</code></p><p>🏢 运营商：{{s.isp or '未知'}}</p><p>🧬 系统：{{s.os_name or '未知系统'}}</p><p>📝 备注：{{s.note or '无'}}</p><hr><div class=grid3><div class=card>🧩 CPU<br><b>{{m.cpu_cores or '?'}} Cores</b></div><div class=card>🧠 内存<br><b>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</b></div><div class=card>💾 硬盘<br><b>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</b></div></div></div><div class=card><h2>📊 资源使用</h2>🔥 CPU <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span> / {{'%.0f'|format(s.cpu_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.cpu_percent or 0,70,s.cpu_alert or 90)}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div><br>🧠 内存 {{fmt_size(m.mem_used or 0) if m.mem_used else '未知'}} / {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} (<span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span>) / {{'%.0f'|format(s.mem_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.mem_percent or 0,70,s.mem_alert or 90)}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div><br>💾 硬盘 {{fmt_size(m.disk_used or 0) if m.disk_used else '未知'}} / {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}} (<span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span>) / {{'%.0f'|format(s.disk_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.disk_percent or 0,70,s.disk_alert or 90)}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div><hr>🌐 流量：⬇️ {{fmt_size(m.rx_bytes or 0)}} / ⬆️ {{fmt_size(m.tx_bytes or 0)}}<br>📡 数据源：{{'🟢 在线' if fresh(m) else '🟠 超时/未上报'}}｜{{m.updated_at or '未知'}}</div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📡 一键部署探针</h2><p class=small>复制到这台服务器 SSH 执行，探针静默上报，离线/恢复由主机器人统一推送。</p><pre id="agentcmd">{{s.agent_cmd}}</pre><button class=primary type=button onclick="copyText('agentcmd')">📋 复制探针命令</button><span id="agentcmdok" class=copyok></span></div><div class=card><h2>🛠️ 操作</h2><div class=btns><form method=post action="/servers/{{s.id}}/check"><button class=primary>📡 立即检测</button></form><form method=post action="/servers/{{s.id}}/refresh"><button>🌍 刷新地区</button></form><a class=btn href="/servers/{{s.id}}/edit">✏️ 编辑资料/阈值</a><form method=post action="/servers/{{s.id}}/delete" onsubmit="return delok()"><button class=danger>🗑️ 删除</button></form></div><hr><h3>🎯 告警状态</h3>{% for key,label in [('cpu','🔥 CPU'),('mem','🧠 内存'),('disk','💾 硬盘')] %}{% set st=s.states.get(key) %}<p>{{label}}：{{'🚨 告警中' if st and st.active else '✅ 正常'}}{% if st %}｜上次 {{st.last_value|round(0)}}%｜{{st.last_sent_at}}{% endif %}</p>{% endfor %}</div></div>'''
-FORM='''<div class=top><h1>{{'➕' if is_add else '✏️'}} {{action}}</h1><a class=btn href="/servers">📋 返回</a></div><form method=post class=card><div class=formgrid><div><label>🏷️ 名称</label><input name=name value="{{s.name or ''}}" required></div><div><label>🌐 IP/主机</label><input name=host value="{{s.host or ''}}" required placeholder="1.2.3.4 或 example.com"></div><div><label>🔌 端口</label><input name=check_port type=number min=1 max=65535 value="{{s.check_port or 22}}"></div><div><label>🧬 系统</label><input name=os_name value="{{s.os_name or ''}}" placeholder="探针安装上报后自动识别，也可手动填写"><div class=small>添加服务器时无法凭 IP 自动识别系统；安装探针并上报成功后会自动写入。</div></div><div><label>🔁 周期</label><select name=cycle><option value=monthly {{'selected' if s.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if s.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if s.cycle=='yearly' else ''}}>年付</option></select></div><div><label>📆 到期</label><input name=expire_at type=date value="{{s.expire_at or ''}}"></div><div><label>💰 价格</label><input name=price type=number step=.01 value="{{s.price if s.price is not none else 0}}"></div><div><label>💱 币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if (s.currency or 'USD')==c else ''}}>{{c}}</option>{% endfor %}</select></div><div><label>🔥 CPU 阈值 %</label><input name=cpu_alert type=number min=1 max=100 value="{{s.cpu_alert or 90}}"></div><div><label>🧠 内存阈值 %</label><input name=mem_alert type=number min=1 max=100 value="{{s.mem_alert or 90}}"></div><div><label>💾 硬盘阈值 %</label><input name=disk_alert type=number min=1 max=100 value="{{s.disk_alert or 90}}"></div><div><label>📝 备注</label><textarea name=note rows=4>{{s.note or ''}}</textarea></div></div><hr><label><input type=checkbox name=free_forever style="width:auto" {{'checked' if s.free_forever else ''}}> 🎁 永久免费</label><label><input type=checkbox name=auto_renew style="width:auto" {{'checked' if s.auto_renew else ''}}> 🔁 自动续费</label><div class=btns style="margin-top:18px"><button class=primary type=submit>💾 保存</button><a class=btn href="/servers">取消</a></div></form>'''
-LOCAL='''<div class=top><h1>🏠 本机面板</h1><a class=btn href="/">📊 总览</a></div><div class=grid3><div class="card kpi"><div>🌐 公网IP</div><div class=value style="font-size:22px">{{local.public_ip or '未知'}}</div></div><div class="card kpi"><div>⏱️ 运行</div><div class=value style="font-size:22px">{{local.uptime or '未知'}}</div></div><div class="card kpi"><div>🧩 CPU</div><div class=value>{{local.cpu_count or 0}} 核</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📊 资源</h2>🔥 CPU {{'%.0f'|format(local.cpu or 0)}}%<div class=progress><div class=bar style="width:{{local.cpu or 0}}%"></div></div><br>🧠 内存 {{fmt(local.mem_used or 0)}} / {{fmt(local.mem_total or 0)}} ({{'%.0f'|format(local.mem_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.mem_percent or 0}}%"></div></div><br>💾 磁盘 {{fmt(local.disk_used or 0)}} / {{fmt(local.disk_total or 0)}} ({{'%.0f'|format(local.disk_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.disk_percent or 0}}%"></div></div></div><form class=card method=post><h2>✏️ 编辑本机资料</h2><label>名称</label><input name=name value="{{profile.name}}"><label>备注</label><input name=note value="{{profile.note}}"><label>周期</label><select name=cycle><option value=monthly {{'selected' if profile.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if profile.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if profile.cycle=='yearly' else ''}}>年付</option></select><label>价格</label><input name=price value="{{profile.price}}"><label>币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if profile.currency==c else ''}}>{{c}}</option>{% endfor %}</select><label>到期</label><input name=expire_at type=date value="{{profile.expire_at}}"><button class=primary>💾 保存</button></form></div>'''
+FORM='''<div class=top><h1>{{'➕' if is_add else '✏️'}} {{action}}</h1><a class=btn href="/servers">📋 返回</a></div><form method=post class=card><div class=formgrid><div><label>🏷️ 名称</label><input name=name value="{{s.name or ''}}" required></div><div><label>🌐 IP/主机</label><input name=host value="{{s.host or ''}}" required placeholder="1.2.3.4 或 example.com"></div><div><label>🔌 端口</label><input name=check_port type=number min=1 max=65535 value="{{s.check_port or 22}}"></div><div><label>🧬 系统</label><input name=os_name value="{{probe_os_name_for_server(s)}}" placeholder="探针安装上报后自动识别，也可手动填写"><div class=small>安装探针并成功上报后会自动显示系统；也可以手动填写覆盖。</div></div><div><label>🔁 周期</label><select name=cycle><option value=monthly {{'selected' if s.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if s.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if s.cycle=='yearly' else ''}}>年付</option></select></div><div><label>📆 到期</label><input name=expire_at type=datetime-local value="{{datetime_input_value(s.expire_at or '')}}" placeholder="请选择到期日期和时间"></div><div><label>💰 价格</label><input name=price type=number step=.01 value="{{s.price if s.price is not none else 0}}"></div><div><label>💱 币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if (s.currency or 'USD')==c else ''}}>{{c}}</option>{% endfor %}</select></div><div><label>🔥 CPU 阈值 %</label><input name=cpu_alert type=number min=1 max=100 value="{{s.cpu_alert or 90}}"></div><div><label>🧠 内存阈值 %</label><input name=mem_alert type=number min=1 max=100 value="{{s.mem_alert or 90}}"></div><div><label>💾 硬盘阈值 %</label><input name=disk_alert type=number min=1 max=100 value="{{s.disk_alert or 90}}"></div><div><label>📝 备注</label><textarea name=note rows=4>{{s.note or ''}}</textarea></div></div><hr><label><input type=checkbox name=free_forever style="width:auto" {{'checked' if s.free_forever else ''}}> 🎁 永久免费</label><label><input type=checkbox name=auto_renew style="width:auto" {{'checked' if s.auto_renew else ''}}> 🔁 自动续费</label><div class=btns style="margin-top:18px"><button class=primary type=submit>💾 保存</button><a class=btn href="/servers">取消</a></div></form>'''
+LOCAL='''<div class=top><h1>🏠 本机面板</h1><a class=btn href="/">📊 总览</a></div><div class=grid3><div class="card kpi"><div>🌐 公网IP</div><div class=value style="font-size:22px">{{local.public_ip or '未知'}}</div></div><div class="card kpi"><div>⏱️ 运行</div><div class=value style="font-size:22px">{{local.uptime or '未知'}}</div></div><div class="card kpi"><div>🧩 CPU</div><div class=value>{{local.cpu_count or 0}} 核</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📊 资源</h2>🔥 CPU {{'%.0f'|format(local.cpu or 0)}}%<div class=progress><div class=bar style="width:{{local.cpu or 0}}%"></div></div><br>🧠 内存 {{fmt(local.mem_used or 0)}} / {{fmt(local.mem_total or 0)}} ({{'%.0f'|format(local.mem_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.mem_percent or 0}}%"></div></div><br>💾 磁盘 {{fmt(local.disk_used or 0)}} / {{fmt(local.disk_total or 0)}} ({{'%.0f'|format(local.disk_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.disk_percent or 0}}%"></div></div></div><form class=card method=post><h2>✏️ 编辑本机资料</h2><label>名称</label><input name=name value="{{profile.name}}"><label>备注</label><input name=note value="{{profile.note}}"><label>周期</label><select name=cycle><option value=monthly {{'selected' if profile.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if profile.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if profile.cycle=='yearly' else ''}}>年付</option></select><label>价格</label><input name=price value="{{profile.price}}"><label>币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if profile.currency==c else ''}}>{{c}}</option>{% endfor %}</select><label>到期</label><input name=expire_at type=datetime-local value="{{datetime_input_value(profile.expire_at)}}"><button class=primary>💾 保存</button></form></div>'''
 EVENTS='''<div class=top><h1>🧾✨ 事件记录</h1><a class=btn href="/">📊 总览</a></div><div class=card><p class=small>📜 记录区域已开启滚轮浏览，鼠标放在表格内即可上下滑动查看更多历史事件。</p><div class=scrollbox><table class=table><thead><tr><th>时间</th><th>类型</th><th>标题</th><th>内容</th></tr></thead><tbody>{% for e in events %}<tr><td>{{e.created_at}}</td><td><span class=badge>{{e.event_type}}</span></td><td><b>{{e.title}}</b></td><td class="event-content">{{clean_event_html(e.content)|safe}}{% set ctx=event_context(e) %}{% if ctx %}<div class="event-context">{{ctx|safe}}</div>{% endif %}</td></tr>{% else %}<tr><td colspan=4>暂无事件</td></tr>{% endfor %}</tbody></table></div></div>'''
 SETTINGS='''<div class=top><h1>⚙️✨ 系统设置</h1><a class=btn href="/">📊 返回总览</a></div>
 <div class=grid2 style="margin-top:16px">
@@ -1863,5 +1929,5 @@ def age(v):
         return '未知'
 # ===== END RUNTIME FIX =====
 
-app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row,site_name=site_name,favicon_exists=favicon_exists,clean_event_html=clean_event_html,event_context=event_context,display_price_label=display_price_label,display_expire_label=display_expire_label,metric_config_html=metric_config_html,site_name_value=site_name_value,bot_token_value=bot_token_value,admin_ids_value=admin_ids_value)
+app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row,site_name=site_name,favicon_exists=favicon_exists,clean_event_html=clean_event_html,event_context=event_context,display_price_label=display_price_label,display_expire_label=display_expire_label,metric_config_html=metric_config_html,site_name_value=site_name_value,bot_token_value=bot_token_value,admin_ids_value=admin_ids_value,datetime_input_value=datetime_input_value,probe_os_name_for_server=probe_os_name_for_server)
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
