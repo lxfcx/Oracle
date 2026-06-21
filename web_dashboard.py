@@ -441,6 +441,7 @@ def api_servers_live():
     resp.headers['Pragma']='no-cache'
     resp.headers['Expires']='0'
     return resp
+
 # ===== END WEB V3 FIX HELPERS =====
 
 
@@ -692,6 +693,48 @@ def display_price_expire(row):
     return display_price_label(row), display_expire_label(row)
 # ===== END FREE LABEL FIX PATCH =====
 
+
+# ===== KOMARI STYLE REALTIME PATCH =====
+def metric_config_html(m):
+    m=m or {}
+    def iv(v):
+        try: return int(float(v or 0))
+        except Exception: return 0
+    cpu=iv(m.get('cpu_cores'))
+    mem=iv(m.get('mem_total'))
+    swap=iv(m.get('swap_total'))
+    disk=iv(m.get('disk_total'))
+    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt(mem) if mem else '未知'} ｜ 🔄 {fmt(swap) if swap else '无'} ｜ 💾 {fmt(disk) if disk else '未知'}"
+
+def metric_json(x):
+    m=x.get('metrics') or {}
+    def f(v):
+        try: return float(v or 0)
+        except Exception: return 0.0
+    def i(v):
+        try: return int(float(v or 0))
+        except Exception: return 0
+    return {
+        'id':x.get('id'),
+        'online':bool(x.get('online')),
+        'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知',
+        'uptime':dur(m.get('uptime_seconds') or 0),
+        'cpu':f(m.get('cpu_percent')),
+        'mem':f(m.get('mem_percent')),
+        'swap':f(m.get('swap_percent')),
+        'disk':f(m.get('disk_percent')),
+        'cpu_cores':i(m.get('cpu_cores')),
+        'mem_total':i(m.get('mem_total')),
+        'mem_used':i(m.get('mem_used')),
+        'swap_total':i(m.get('swap_total')),
+        'swap_used':i(m.get('swap_used')),
+        'disk_total':i(m.get('disk_total')),
+        'disk_used':i(m.get('disk_used')),
+        'updated_at':m.get('updated_at') or '',
+        'config_html':metric_config_html(m),
+    }
+# ===== END KOMARI STYLE REALTIME PATCH =====
+
 LOGIN='''<!doctype html><html><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>登录</title><link id="favLink" rel="icon" href="/favicon.ico?v=login"><style>
 :root{--text:#edf5ff;--muted:#9fb0c7;--line:#ffffff28;--glass:#ffffff16;--glass2:#ffffff28;--a:#6ee7ff;--b:#a78bfa;--shadow:#0008}
 body.light{--text:#0f172a;--muted:#475569;--line:#0f172a22;--glass:#ffffff55;--glass2:#ffffff88;--shadow:#64748b44}
@@ -780,6 +823,15 @@ html.light .muted,html.light .small,html.light .label,html.light .table th{color
 @keyframes livePulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
 .live-updated{font-size:12px;color:var(--muted);font-weight:850;margin-top:6px}
 .realtime-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 8px;font-size:12px;font-weight:900;color:var(--muted)}
+
+
+/* Komari-like realtime bars */
+.progress{position:relative}
+.bar{transition:width .75s cubic-bezier(.22,.61,.36,1),background .2s ease!important;position:relative;overflow:hidden}
+.bar:after{content:"";position:absolute;top:0;bottom:0;width:45%;left:-55%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.42),transparent);animation:barFlow 1.4s linear infinite}
+@keyframes barFlow{to{left:110%}}
+.server-title .dot.online{animation:dotPulse 1.45s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
 
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
@@ -877,30 +929,52 @@ function setBar(id,k,v){
   });
   setText('[data-'+k+'txt="'+id+'"]',Math.round(Number(v||0))+'%');
 }
+function fmtBytes(n){
+  n=Number(n||0);
+  if(!n)return '0B';
+  let u=['B','KB','MB','GB','TB','PB'];
+  let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++;}
+  return n.toFixed(1)+u[i];
+}
+function qsAll(sel){return Array.from(document.querySelectorAll(sel));}
+function setText(sel,txt){qsAll(sel).forEach(e=>e.textContent=txt);}
+function setHtml(sel,txt){qsAll(sel).forEach(e=>e.innerHTML=txt);}
+function setBar(id,key,val){
+  let v=Number(val||0);
+  qsAll('[data-'+key+'="'+id+'"]').forEach(e=>{
+    e.style.width=Math.max(0,Math.min(100,v))+'%';
+    e.classList.toggle('bad',v>=80);
+    e.classList.toggle('warn',v>=50&&v<80);
+  });
+  setText('[data-'+key+'txt="'+id+'"]',Math.round(v)+'%');
+}
+function paintServer(s){
+  setBar(s.id,'cpu',s.cpu);
+  setBar(s.id,'mem',s.mem);
+  setBar(s.id,'swap',s.swap);
+  setBar(s.id,'disk',s.disk);
+  setText('[data-uptime="'+s.id+'"]',s.uptime||'未知');
+  setText('[data-status="'+s.id+'"]',(s.online?'🟢 ':'🔴 ')+(s.status||'未知'));
+  setHtml('[data-hw="'+s.id+'"]',s.config_html||'');
+  setText('[data-cpucores="'+s.id+'"]',(s.cpu_cores||'?')+' Cores');
+  setText('[data-memused="'+s.id+'"]',fmtBytes(s.mem_used));
+  setText('[data-memtotal="'+s.id+'"]',fmtBytes(s.mem_total));
+  setText('[data-swapused="'+s.id+'"]',fmtBytes(s.swap_used));
+  setText('[data-swaptotal="'+s.id+'"]',s.swap_total?fmtBytes(s.swap_total):'无');
+  setText('[data-diskused="'+s.id+'"]',fmtBytes(s.disk_used));
+  setText('[data-disktotal="'+s.id+'"]',fmtBytes(s.disk_total));
+  setText('[data-updated="'+s.id+'"]',s.updated_at||'未知');
+  qsAll('[data-live-dot="'+s.id+'"]').forEach(e=>{
+    e.classList.toggle('online',!!s.online);
+    e.classList.toggle('offline',!s.online);
+  });
+}
 async function live(){
   try{
-    let j=await(await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store'})).json();
-    (j.servers||[]).forEach(s=>{
-      setBar(s.id,'cpu',s.cpu);
-      setBar(s.id,'mem',s.mem);
-      setBar(s.id,'swap',s.swap);
-      setBar(s.id,'disk',s.disk);
-      setText('[data-uptime="'+s.id+'"]',s.uptime||'未知');
-      setText('[data-status="'+s.id+'"]',(s.online?'🟢 ':'🔴 ')+(s.status||'未知'));
-      setHtml('[data-hw="'+s.id+'"]',s.config_html||'');
-      setText('[data-cpucores="'+s.id+'"]',(s.cpu_cores||'?')+' Cores');
-      setText('[data-memused="'+s.id+'"]',fmtBytes(s.mem_used));
-      setText('[data-memtotal="'+s.id+'"]',fmtBytes(s.mem_total));
-      setText('[data-swapused="'+s.id+'"]',fmtBytes(s.swap_used));
-      setText('[data-swaptotal="'+s.id+'"]',s.swap_total?fmtBytes(s.swap_total):'无');
-      setText('[data-diskused="'+s.id+'"]',fmtBytes(s.disk_used));
-      setText('[data-disktotal="'+s.id+'"]',fmtBytes(s.disk_total));
-      setText('[data-updated="'+s.id+'"]',s.updated_at||'未知');
-      document.querySelectorAll('[data-live-dot="'+s.id+'"]').forEach(e=>{
-        e.classList.toggle('online',!!s.online);
-        e.classList.toggle('offline',!s.online);
-      });
-    });
+    let r=await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store'});
+    let j=await r.json();
+    (j.servers||[]).forEach(paintServer);
   }catch(e){}
 }
 async function refreshKpi(){
