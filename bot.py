@@ -4907,9 +4907,6 @@ def ensure_metrics_hardware_columns():
         ("disk_total", "INTEGER DEFAULT 0"),
         ("disk_used", "INTEGER DEFAULT 0"),
         ("mem_used", "INTEGER DEFAULT 0"),
-        ("swap_total", "INTEGER DEFAULT 0"),
-        ("swap_used", "INTEGER DEFAULT 0"),
-        ("swap_percent", "REAL DEFAULT 0"),
     ]:
         ensure_column(conn, "server_metrics", col, definition)
     conn.commit()
@@ -4953,9 +4950,8 @@ def save_agent_metrics(payload):
         cpu_percent,mem_percent,disk_percent,
         rx_bytes,tx_bytes,
         cpu_cores,mem_total,disk_total,disk_used,mem_used,
-        swap_total,swap_used,swap_percent,
         updated_at,raw
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         int(sid),
         name,
@@ -4973,9 +4969,6 @@ def save_agent_metrics(payload):
         to_int(payload.get("disk_total")),
         to_int(payload.get("disk_used")),
         to_int(payload.get("mem_used")),
-        to_int(payload.get("swap_total")),
-        to_int(payload.get("swap_used")),
-        to_float(payload.get("swap_percent")),
         updated_at,
         json.dumps(payload, ensure_ascii=False)
     ))
@@ -5001,9 +4994,7 @@ def hardware_config_line(m):
     parts = []
     parts.append(f"🧩 {cpu} Cores" if cpu else "🧩 CPU 未知")
     parts.append(f"🧠 {fmt_size(mem)}" if mem else "🧠 内存未知")
-    swap = int(m["swap_total"] or 0) if "swap_total" in m.keys() else 0
     parts.append(f"💾 {fmt_size(disk)}" if disk else "💾 硬盘未知")
-    parts.append(f"🔄 SWAP {fmt_size(swap)}" if swap else "🔄 SWAP 无")
     return "⚙️ 服务器配置：" + " ｜ ".join(parts)
 
 
@@ -5013,8 +5004,7 @@ def hardware_config_short(m):
     cpu = int(m["cpu_cores"] or 0) if "cpu_cores" in m.keys() else 0
     mem = int(m["mem_total"] or 0) if "mem_total" in m.keys() else 0
     disk = int(m["disk_total"] or 0) if "disk_total" in m.keys() else 0
-    swap = int(m["swap_total"] or 0) if "swap_total" in m.keys() else 0
-    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt_size(mem) if mem else '?'} ｜ 🔄 {fmt_size(swap) if swap else '无'} ｜ 💾 {fmt_size(disk) if disk else '?'}"
+    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt_size(mem) if mem else '?'} ｜ 💾 {fmt_size(disk) if disk else '?'}"
 
 
 def agent_install_command(server_name="server", sid=None):
@@ -5086,7 +5076,6 @@ def remote_detail_text(r):
             f"\n{hardware_config_line(m)}"
             f"\n📊 探针 CPU：{m['cpu_percent']:.0f}%"
             f"\n🧠 探针内存：{fmt_size(m['mem_used']) if 'mem_used' in m.keys() and m['mem_used'] else '未知'} / {fmt_size(m['mem_total']) if 'mem_total' in m.keys() and m['mem_total'] else '未知'} ({m['mem_percent']:.0f}%)"
-            f"\n🔄 探针 SWAP：{fmt_size(m['swap_used']) if 'swap_used' in m.keys() and m['swap_used'] else '0B'} / {fmt_size(m['swap_total']) if 'swap_total' in m.keys() and m['swap_total'] else '无'} ({float(m['swap_percent']) if 'swap_percent' in m.keys() and m['swap_percent'] else 0:.0f}%)"
             f"\n💾 探针硬盘：{fmt_size(m['disk_used']) if 'disk_used' in m.keys() and m['disk_used'] else '未知'} / {fmt_size(m['disk_total']) if 'disk_total' in m.keys() and m['disk_total'] else '未知'} ({m['disk_percent']:.0f}%)"
             f"\n🌐 探针流量：⬇️{fmt_size(m['rx_bytes'])} / ⬆️{fmt_size(m['tx_bytes'])}"
         )
@@ -6273,6 +6262,144 @@ def init_db():
     _old_init_db_threshold_patch()
     ensure_alert_threshold_columns()
 
+
+
+# ============================================================
+# REALTIME SWAP METRICS FINAL PATCH
+# 覆盖旧探针存储函数，支持 CPU 核心数、内存、SWAP、硬盘总量/已用/百分比。
+# ============================================================
+def ensure_metrics_table():
+    conn = db()
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS server_metrics (
+        server_id INTEGER PRIMARY KEY,
+        name TEXT DEFAULT '',
+        hostname TEXT DEFAULT '',
+        public_ip TEXT DEFAULT '',
+        uptime_seconds INTEGER DEFAULT 0,
+        boot_time TEXT DEFAULT '',
+        cpu_percent REAL DEFAULT 0,
+        mem_percent REAL DEFAULT 0,
+        disk_percent REAL DEFAULT 0,
+        rx_bytes INTEGER DEFAULT 0,
+        tx_bytes INTEGER DEFAULT 0,
+        cpu_cores INTEGER DEFAULT 0,
+        mem_total INTEGER DEFAULT 0,
+        mem_used INTEGER DEFAULT 0,
+        swap_total INTEGER DEFAULT 0,
+        swap_used INTEGER DEFAULT 0,
+        swap_percent REAL DEFAULT 0,
+        disk_total INTEGER DEFAULT 0,
+        disk_used INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT '',
+        raw TEXT DEFAULT ''
+    )
+    """)
+    for col, definition in [
+        ("cpu_cores", "INTEGER DEFAULT 0"),
+        ("mem_total", "INTEGER DEFAULT 0"),
+        ("mem_used", "INTEGER DEFAULT 0"),
+        ("swap_total", "INTEGER DEFAULT 0"),
+        ("swap_used", "INTEGER DEFAULT 0"),
+        ("swap_percent", "REAL DEFAULT 0"),
+        ("disk_total", "INTEGER DEFAULT 0"),
+        ("disk_used", "INTEGER DEFAULT 0"),
+    ]:
+        ensure_column(conn, "server_metrics", col, definition)
+    conn.commit()
+    conn.close()
+
+def ensure_metrics_hardware_columns():
+    ensure_metrics_table()
+
+def save_agent_metrics(payload):
+    ensure_metrics_table()
+    sid = str(payload.get("server_id") or payload.get("sid") or "").strip()
+    if not sid.isdigit():
+        return False, "missing server_id"
+
+    conn = db()
+    row = conn.execute("SELECT id FROM servers WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return False, "server not found"
+
+    def to_int(v, default=0):
+        try:
+            return int(float(v))
+        except Exception:
+            return default
+
+    def to_float(v, default=0):
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    updated_at = now_text()
+    conn.execute("""
+    INSERT OR REPLACE INTO server_metrics(
+        server_id,name,hostname,public_ip,uptime_seconds,boot_time,
+        cpu_percent,mem_percent,disk_percent,rx_bytes,tx_bytes,
+        cpu_cores,mem_total,mem_used,swap_total,swap_used,swap_percent,disk_total,disk_used,
+        updated_at,raw
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        int(sid),
+        str(payload.get("name") or ""),
+        str(payload.get("hostname") or ""),
+        str(payload.get("public_ip") or ""),
+        to_int(payload.get("uptime_seconds")),
+        str(payload.get("boot_time") or ""),
+        to_float(payload.get("cpu_percent")),
+        to_float(payload.get("mem_percent")),
+        to_float(payload.get("disk_percent")),
+        to_int(payload.get("rx_bytes")),
+        to_int(payload.get("tx_bytes")),
+        to_int(payload.get("cpu_cores")),
+        to_int(payload.get("mem_total")),
+        to_int(payload.get("mem_used")),
+        to_int(payload.get("swap_total")),
+        to_int(payload.get("swap_used")),
+        to_float(payload.get("swap_percent")),
+        to_int(payload.get("disk_total")),
+        to_int(payload.get("disk_used")),
+        updated_at,
+        json.dumps(payload, ensure_ascii=False)
+    ))
+    conn.commit()
+    conn.close()
+    return True, "ok"
+
+def get_agent_metrics(server_id):
+    ensure_metrics_table()
+    conn = db()
+    row = conn.execute("SELECT * FROM server_metrics WHERE server_id=?", (server_id,)).fetchone()
+    conn.close()
+    return row
+
+def _metric_value(row, key, default=0):
+    try:
+        return row[key] if key in row.keys() and row[key] is not None else default
+    except Exception:
+        return default
+
+def agent_runtime_line(r):
+    m = get_agent_metrics(r["id"])
+    if not m:
+        return "⏱️ 系统运行时长：未收到探针数据"
+    status = "🟢 探针在线" if metrics_fresh(m) else "🟠 探针超时"
+    return (
+        f"⏱️ 系统运行时长：{h(duration_from_seconds(_metric_value(m,'uptime_seconds')))}\n"
+        f"🕒 系统开机时间：{h(_metric_value(m,'boot_time','未知') or '未知')}\n"
+        f"⚙️ 服务器配置：🧩 {h(_metric_value(m,'cpu_cores','?'))}C ｜ 🧠 {fmt_size(_metric_value(m,'mem_total'))} ｜ 🔄 {fmt_size(_metric_value(m,'swap_total')) if _metric_value(m,'swap_total') else '无'} ｜ 💾 {fmt_size(_metric_value(m,'disk_total'))}\n"
+        f"📡 探针状态：{status}｜最后上报 {h(_metric_value(m,'updated_at','未知') or '未知')}"
+    )
+
+_old_init_db_realtime_swap_patch = init_db
+def init_db():
+    _old_init_db_realtime_swap_patch()
+    ensure_metrics_table()
 
 if __name__ == "__main__":
     init_db()
