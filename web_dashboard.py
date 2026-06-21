@@ -436,7 +436,9 @@ def settings_page():
 @login_required
 def api_servers_live():
     ss=all_servers()
-    return jsonify({'time':now(),'servers':[metric_json(x) for x in ss]})
+    resp=jsonify({'time':now(),'servers':[metric_json(x) for x in ss]})
+    resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+    return resp
 # ===== END WEB V3 FIX HELPERS =====
 
 
@@ -632,6 +634,47 @@ def metric_json(x):
     }
 # ===== END REALTIME METRICS DISPLAY PATCH =====
 
+# ===== REALTIME WEB PATCH =====
+def metric_config_html(m):
+    m=m or {}
+    def iv(v):
+        try: return int(float(v or 0))
+        except Exception: return 0
+    cpu=iv(m.get('cpu_cores'))
+    mem=iv(m.get('mem_total'))
+    swap=iv(m.get('swap_total'))
+    disk=iv(m.get('disk_total'))
+    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt(mem) if mem else '未知'} ｜ 🔄 {fmt(swap) if swap else '无'} ｜ 💾 {fmt(disk) if disk else '未知'}"
+
+def metric_json(x):
+    m=x.get('metrics') or {}
+    def f(v):
+        try: return float(v or 0)
+        except Exception: return 0.0
+    def i(v):
+        try: return int(float(v or 0))
+        except Exception: return 0
+    return {
+        'id':x.get('id'),
+        'online':bool(x.get('online')),
+        'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知',
+        'uptime':dur(m.get('uptime_seconds') or 0),
+        'cpu':f(m.get('cpu_percent')),
+        'mem':f(m.get('mem_percent')),
+        'swap':f(m.get('swap_percent')),
+        'disk':f(m.get('disk_percent')),
+        'cpu_cores':i(m.get('cpu_cores')),
+        'mem_total':i(m.get('mem_total')),
+        'mem_used':i(m.get('mem_used')),
+        'swap_total':i(m.get('swap_total')),
+        'swap_used':i(m.get('swap_used')),
+        'disk_total':i(m.get('disk_total')),
+        'disk_used':i(m.get('disk_used')),
+        'updated_at':m.get('updated_at') or '',
+        'config_html':metric_config_html(m),
+    }
+# ===== END REALTIME WEB PATCH =====
+
 # ===== FREE LABEL FIX PATCH =====
 def display_price_label(row):
     if truth((row or {}).get('free_forever')):
@@ -819,23 +862,24 @@ function showToast(msg){
   setTimeout(()=>x.classList.remove('show'),2600);
 }
 function fmtBytes(n){n=Number(n||0);if(!n)return '0B';let u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return n.toFixed(1)+u[i];}
+function fmtBytes(n){n=Number(n||0);if(!n)return '0B';let u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return n.toFixed(1)+u[i];}
 async function live(){
   try{
-    let j=await(await fetch('/api/servers-live')).json();
+    let j=await(await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store'})).json();
     (j.servers||[]).forEach(s=>{
       ['cpu','mem','swap','disk'].forEach(k=>{
         let v=Number(s[k]||0);
         document.querySelectorAll('[data-'+k+'="'+s.id+'"]').forEach(e=>{
-          let limit=Number(e.dataset.limit||90);
           e.style.width=Math.max(0,Math.min(100,v))+'%';
           e.classList.toggle('bad',v>=80);
           e.classList.toggle('warn',v>=50&&v<80);
         });
         document.querySelectorAll('[data-'+k+'txt="'+s.id+'"]').forEach(e=>e.textContent=Math.round(v)+'%');
       });
-      document.querySelectorAll('[data-uptime="'+s.id+'"]').forEach(e=>e.textContent=s.uptime);
-      document.querySelectorAll('[data-status="'+s.id+'"]').forEach(e=>e.textContent=(s.online?'🟢 ':'🔴 ')+s.status);
+      document.querySelectorAll('[data-uptime="'+s.id+'"]').forEach(e=>e.textContent=s.uptime||'未知');
+      document.querySelectorAll('[data-status="'+s.id+'"]').forEach(e=>e.textContent=(s.online?'🟢 ':'🔴 ')+(s.status||'未知'));
       document.querySelectorAll('[data-hw="'+s.id+'"]').forEach(e=>e.innerHTML=s.config_html||e.innerHTML);
+      document.querySelectorAll('[data-cpucores="'+s.id+'"]').forEach(e=>e.textContent=(s.cpu_cores||'?')+' Cores');
       document.querySelectorAll('[data-memused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.mem_used));
       document.querySelectorAll('[data-memtotal="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.mem_total));
       document.querySelectorAll('[data-swapused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.swap_used));
@@ -844,7 +888,7 @@ async function live(){
       document.querySelectorAll('[data-disktotal="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.disk_total));
       document.querySelectorAll('[data-updated="'+s.id+'"]').forEach(e=>e.textContent=s.updated_at||'未知');
     });
-  }catch(e){}
+  }catch(e){console.log('live refresh failed',e);}
 }
 async function refreshKpi(){
   try{
