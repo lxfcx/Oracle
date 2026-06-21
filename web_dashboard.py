@@ -153,6 +153,18 @@ def vhost(v):
     return v
 
 def passok(p): return check_password_hash(WEB_PASSWORD_HASH,p) if WEB_PASSWORD_HASH else (bool(WEB_PASSWORD) and p==WEB_PASSWORD)
+
+def local_or_login(fn):
+    @wraps(fn)
+    def w(*a, **kw):
+        ip = request.remote_addr or ''
+        if ip in ('127.0.0.1', '::1', 'localhost'):
+            return fn(*a, **kw)
+        if not session.get('ok'):
+            return redirect(url_for('login', next=request.path))
+        return fn(*a, **kw)
+    return w
+
 def login_required(fn):
     @wraps(fn)
     def w(*a,**kw):
@@ -463,7 +475,7 @@ def settings_page():
     return render('settings',SETTINGS,web_user=WEB_USERNAME,bot_token=BOT_TOKEN,admin_ids=','.join(ADMIN_IDS) if 'ADMIN_IDS' in globals() and isinstance(ADMIN_IDS,list) else os.getenv('ADMIN_IDS',''),has_bg=bool(theme_bg_exists()),theme_css=active_theme_css())
 
 @app.route('/api/local-live')
-@login_required
+@local_or_login
 def api_local_live():
     resp=jsonify(_local_live_json())
     resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
@@ -1888,7 +1900,37 @@ DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><bu
 <div class="card servercard"><h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><div class="metric-extra"><div class="mini"><b>网络</b><span data-netspeed="{{s.id}}">↑ 0B/s&nbsp;&nbsp;↓ 0B/s</span></div><div class="mini"><b>流量</b><span data-traffic="{{s.id}}">↑ 0B&nbsp;&nbsp;↓ 0B</span></div><div class="mini"><b>负载</b><span data-load="{{s.id}}">0.00 ｜ 0.00 ｜ 0.00</span></div></div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
 {% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>
 <div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态/在线时长</th><th>资源进度</th><th>费用/到期</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=5>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>
-<div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td class="event-content">{{clean_event_html(e.content)|safe}}{% set ctx=event_context(e) %}{% if ctx %}<div class="event-context">{{ctx|safe}}</div>{% endif %}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>'''
+<div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td class="event-content">{{clean_event_html(e.content)|safe}}{% set ctx=event_context(e) %}{% if ctx %}<div class="event-context">{{ctx|safe}}</div>{% endif %}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>
+
+<div class="card" style="margin-top:16px">
+  <h2>🏠 主控本机状态</h2>
+  <div class=grid3>
+    <div class="card kpi">
+      <div class=label>🔥 CPU</div>
+      <div class=value style="font-size:24px"><span data-local-cputxt>0%</span></div>
+      <div class=progress><div class=bar data-local-cpu style="width:0%"></div></div>
+    </div>
+    <div class="card kpi">
+      <div class=label>🧠 内存</div>
+      <div class=value style="font-size:24px"><span data-local-memtxt>0%</span></div>
+      <div class=small><span data-local-memused>0B</span> / <span data-local-memtotal>0B</span></div>
+      <div class=progress><div class=bar data-local-mem style="width:0%"></div></div>
+    </div>
+    <div class="card kpi">
+      <div class=label>💾 硬盘</div>
+      <div class=value style="font-size:24px"><span data-local-disktxt>0%</span></div>
+      <div class=small><span data-local-diskused>0B</span> / <span data-local-disktotal>0B</span></div>
+      <div class=progress><div class=bar data-local-disk style="width:0%"></div></div>
+    </div>
+  </div>
+  <div class="metric-extra" style="margin-top:14px">
+    <div class="mini"><b>网络</b><span data-local-netspeed>↑ 0B/s&nbsp;&nbsp;↓ 0B/s</span></div>
+    <div class="mini"><b>流量</b><span data-local-traffic>↑ 0B&nbsp;&nbsp;↓ 0B</span></div>
+    <div class="mini"><b>负载</b><span data-local-load>0.00 ｜ 0.00 ｜ 0.00</span></div>
+  </div>
+  <div class=small style="margin-top:10px">⏱️ 运行时长：<span data-local-uptime>未知</span></div>
+</div>
+'''
 
 SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a><a class=btn href="/">📊 总览</a></div></div>
 <div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok">{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad">{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针</div><div class=value>{{data.probes}}</div></div></div>
