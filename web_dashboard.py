@@ -1061,6 +1061,220 @@ html.light body:not(.solid) .card.servercard {
 
 /* ===== end glass transparency restore patch ===== */
 
+
+/* ===== colorful readable badge/price/status restore patch ===== */
+
+/* 不再让所有 badge/价格都变黑白：恢复多彩视觉 */
+.badge,
+.price,
+[class*="price"],
+[class*="expire"],
+.good,
+.ok,
+.warn,
+.bad,
+.danger,
+.server-status,
+.status,
+.event-context {
+  text-shadow: none;
+}
+
+/* 夜间：基础文字仍清楚，但允许彩色元素有自己的颜色 */
+html:not(.light) .badge {
+  background: rgba(18,32,48,.48) !important;
+  border: 1px solid rgba(255,255,255,.22) !important;
+  color: #eef7ff !important;
+  text-shadow: 0 1px 3px rgba(0,0,0,.55) !important;
+}
+
+/* 日间 badge */
+html.light .badge {
+  background: rgba(255,255,255,.62) !important;
+  border: 1px solid rgba(15,23,42,.16) !important;
+  color: #0f172a !important;
+  text-shadow: none !important;
+}
+
+/* 价格：蓝紫渐变，夜间日间都清楚 */
+.badge.price,
+.price,
+[class*="price"] {
+  background: linear-gradient(135deg, rgba(96,165,250,.32), rgba(168,85,247,.28)) !important;
+  border-color: rgba(147,197,253,.45) !important;
+  color: #dbeafe !important;
+  font-weight: 950 !important;
+}
+html.light .badge.price,
+html.light .price,
+html.light [class*="price"] {
+  background: linear-gradient(135deg, rgba(59,130,246,.18), rgba(168,85,247,.15)) !important;
+  border-color: rgba(59,130,246,.32) !important;
+  color: #1d4ed8 !important;
+}
+
+/* 免费 / 永久免费：绿色 */
+.badge.free,
+.badge.forever {
+  background: linear-gradient(135deg, rgba(34,197,94,.30), rgba(16,185,129,.24)) !important;
+  border-color: rgba(74,222,128,.45) !important;
+  color: #bbf7d0 !important;
+}
+html.light .badge.free,
+html.light .badge.forever {
+  background: linear-gradient(135deg, rgba(34,197,94,.17), rgba(16,185,129,.13)) !important;
+  border-color: rgba(22,163,74,.30) !important;
+  color: #047857 !important;
+}
+
+/* 到期/续费：紫色 */
+.badge.expire,
+[class*="expire"] {
+  background: linear-gradient(135deg, rgba(168,85,247,.30), rgba(236,72,153,.22)) !important;
+  border-color: rgba(216,180,254,.42) !important;
+  color: #f3e8ff !important;
+  font-weight: 950 !important;
+}
+html.light .badge.expire,
+html.light [class*="expire"] {
+  background: linear-gradient(135deg, rgba(168,85,247,.15), rgba(236,72,153,.12)) !important;
+  border-color: rgba(168,85,247,.28) !important;
+  color: #7e22ce !important;
+}
+
+/* 在线/正常：绿色 */
+.good,
+.ok,
+.online,
+.badge.good,
+.badge.ok {
+  color: #4ade80 !important;
+}
+html.light .good,
+html.light .ok,
+html.light .online,
+html.light .badge.good,
+html.light .badge.ok {
+  color: #047857 !important;
+}
+
+/* 警告：黄色/橙色 */
+.warn,
+.badge.warn {
+  color: #facc15 !important;
+}
+html.light .warn,
+html.light .badge.warn {
+  color: #b45309 !important;
+}
+
+/* 危险/离线/过期：红色 */
+.bad,
+.danger,
+.offline,
+.badge.bad,
+.badge.danger {
+  color: #fb7185 !important;
+}
+html.light .bad,
+html.light .danger,
+html.light .offline,
+html.light .badge.bad,
+html.light .badge.danger {
+  color: #b91c1c !important;
+}
+
+/* 进度条恢复多彩：绿/黄/红 */
+.bar {
+  background: linear-gradient(90deg, #22c55e, #14b8a6) !important;
+}
+.bar.warn {
+  background: linear-gradient(90deg, #f59e0b, #facc15) !important;
+}
+.bar.bad {
+  background: linear-gradient(90deg, #ef4444, #fb7185) !important;
+}
+
+/* 实时小卡片恢复彩色边框和文字 */
+.metric-extra .mini:nth-child(1) {
+  border-color: rgba(96,165,250,.35) !important;
+}
+.metric-extra .mini:nth-child(1) b {
+  color: #93c5fd !important;
+}
+.metric-extra .mini:nth-child(2) {
+  border-color: rgba(34,197,94,.35) !important;
+}
+.metric-extra .mini:nth-child(2) b {
+  color: #86efac !important;
+}
+.metric-extra .mini:nth-child(3) {
+  border-color: rgba(168,85,247,.35) !important;
+}
+.metric-extra .mini:nth-child(3) b {
+  color: #d8b4fe !important;
+}
+html.light .metric-extra .mini:nth-child(1) b {
+  color: #2563eb !important;
+}
+html.light .metric-extra .mini:nth-child(2) b {
+  color: #047857 !important;
+}
+html.light .metric-extra .mini:nth-child(3) b {
+  color: #7e22ce !important;
+}
+
+/* 表格/事件里的类型颜色 */
+.event-context {
+  background: linear-gradient(135deg, rgba(14,165,233,.18), rgba(34,197,94,.12)) !important;
+  border-color: rgba(56,189,248,.35) !important;
+  color: #e0f2fe !important;
+}
+html.light .event-context {
+  background: linear-gradient(135deg, rgba(14,165,233,.12), rgba(34,197,94,.09)) !important;
+  border-color: rgba(14,165,233,.26) !important;
+  color: #075985 !important;
+}
+
+/* 图标和标题恢复层次 */
+.server-title b,
+.brand b,
+h1,
+h2,
+h3 {
+  background: linear-gradient(90deg, #7dd3fc, #c4b5fd, #86efac);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+  text-shadow: none !important;
+}
+html.light .server-title b,
+html.light .brand b,
+html.light h1,
+html.light h2,
+html.light h3 {
+  background: linear-gradient(90deg, #2563eb, #7e22ce, #047857);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+}
+
+/* 但按钮文字不要透明 */
+button,
+.btn,
+.nav a {
+  color: inherit;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+}
+
+/* 如果没有 class，常见价格/永久文本所在 badge 也给一点彩色阴影 */
+.badge {
+  box-shadow: 0 8px 24px rgba(56,189,248,.08) !important;
+}
+
+/* ===== end colorful readable badge/price/status restore patch ===== */
+
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
 
