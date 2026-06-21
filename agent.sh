@@ -8,7 +8,7 @@ URL=""
 SECRET=""
 SID=""
 NAME="server"
-INTERVAL="5"
+INTERVAL="2"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,7 +47,7 @@ URL = os.environ.get("AGENT_URL", "")
 SECRET = os.environ.get("AGENT_SECRET", "")
 SID = os.environ.get("SERVER_ID", "")
 NAME = os.environ.get("SERVER_NAME", "server")
-INTERVAL = int(os.environ.get("INTERVAL", "5") or "5")
+INTERVAL = int(os.environ.get("INTERVAL", "2") or "2")
 
 def uptime_seconds():
     try:
