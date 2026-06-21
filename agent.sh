@@ -150,6 +150,24 @@ def loads():
     except Exception:
         return 0, 0, 0
 
+
+def os_name():
+    try:
+        data = {}
+        for line in open("/etc/os-release", "r", encoding="utf-8", errors="ignore"):
+            if "=" in line:
+                k, v = line.rstrip().split("=", 1)
+                data[k] = v.strip().strip('"')
+        pretty = data.get("PRETTY_NAME") or data.get("NAME") or ""
+        if pretty:
+            return pretty[:120]
+    except Exception:
+        pass
+    try:
+        return os.uname().sysname + " " + os.uname().release
+    except Exception:
+        return ""
+
 def public_ip():
     now = time.time()
     if PUBLIC_IP_CACHE["v"] and now - PUBLIC_IP_CACHE["t"] < 600:
@@ -184,6 +202,7 @@ def collect():
         "name": NAME,
         "hostname": socket.gethostname(),
         "public_ip": public_ip(),
+        "os_name": os_name(),
         "uptime_seconds": up,
         "boot_time": boot_time_text(up),
         "cpu_cores": cpu_cores(),
