@@ -805,7 +805,63 @@ body.light:before{background-image:linear-gradient(rgba(255,255,255,.10),rgba(25
 .card{position:relative;z-index:2;width:min(460px,92vw);padding:34px;border:1px solid var(--line);background:linear-gradient(180deg,var(--glass2),var(--glass));border-radius:32px;box-shadow:0 30px 100px var(--shadow);backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px)}
 h1{margin:0 0 8px;font-size:31px}.sub{color:var(--muted);margin-bottom:20px}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0 18px}.ctl{padding:10px 12px;border:1px solid var(--line);background:var(--glass);border-radius:15px;color:var(--text);font-weight:900;cursor:pointer}
 input,.loginbtn{width:100%;padding:15px;border-radius:16px;margin:9px 0;border:1px solid var(--line);font-size:16px}input{background:#00000035;color:var(--text)}body.light input{background:#ffffffc7}.loginbtn{background:linear-gradient(135deg,var(--a),var(--b));color:#07111f;font-weight:950;border:0;cursor:pointer}.flash{background:#fb718522;border:1px solid #fb718577;padding:12px;border-radius:14px}.tip{color:var(--muted);font-size:13px;line-height:1.7;margin-top:10px}
-.top h1{margin:0;font-size:clamp(28px,3vw,44px);font-weight:1000;line-height:1.2;color:var(--text)!important;text-shadow:0 2px 14px rgba(0,0,0,.28)}html.light .top h1{color:#0f172a!important;text-shadow:0 2px 10px rgba(255,255,255,.55)}</style><script>
+.top h1{margin:0;font-size:clamp(28px,3vw,44px);font-weight:1000;line-height:1.2;color:var(--text)!important;text-shadow:0 2px 14px rgba(0,0,0,.28)}html.light .top h1{color:#0f172a!important;text-shadow:0 2px 10px rgba(255,255,255,.55)}
+/* ===== all page title readability final patch ===== */
+/* 所有页面顶部大标题：不再使用透明渐变，强制高对比清晰显示 */
+main .top h1,
+.layout .main .top h1,
+.top > h1,
+body .top h1 {
+  color: #f8fbff !important;
+  background: none !important;
+  -webkit-background-clip: initial !important;
+  background-clip: initial !important;
+  -webkit-text-fill-color: #f8fbff !important;
+  text-shadow:
+    0 2px 4px rgba(0,0,0,.75),
+    0 0 18px rgba(15,23,42,.55) !important;
+  font-weight: 1000 !important;
+  letter-spacing: .2px !important;
+}
+
+/* 日间模式标题：深色清晰 */
+html.light main .top h1,
+html.light .layout .main .top h1,
+html.light .top > h1,
+html.light body .top h1 {
+  color: #0f172a !important;
+  background: none !important;
+  -webkit-background-clip: initial !important;
+  background-clip: initial !important;
+  -webkit-text-fill-color: #0f172a !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,.85),
+    0 2px 10px rgba(255,255,255,.55) !important;
+}
+
+/* 夜间透明背景时再加一点描边感，避免雪山/亮背景吃字 */
+html:not(.light) body:not(.solid) main .top h1,
+html:not(.light) body:not(.solid) .layout .main .top h1,
+html:not(.light) body:not(.solid) .top > h1 {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  text-shadow:
+    0 2px 4px rgba(0,0,0,.88),
+    0 0 3px rgba(0,0,0,.85),
+    0 0 22px rgba(37,99,235,.35) !important;
+}
+
+/* 标题里的 emoji/icon 保持原色，不做透明渐变 */
+main .top h1 *,
+.layout .main .top h1 * {
+  background: none !important;
+  -webkit-background-clip: initial !important;
+  background-clip: initial !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+/* ===== end all page title readability final patch ===== */
+
+</style><script>
 function apply(){let theme=localStorage.getItem('theme')||'dark', glass=localStorage.getItem('glass')||'glass';document.body.classList.toggle('light',theme==='light');document.body.classList.toggle('solid',glass==='solid');let a=document.getElementById('themeText'),b=document.getElementById('glassText');if(a)a.textContent=theme==='light'?'☀️ 当前：日间明亮':'🌙 当前：夜间星空';if(b)b.textContent=glass==='solid'?'⬛ 当前：实色背景':'🧊 当前：透明玻璃'}
 function toggleTheme(){localStorage.setItem('theme',(localStorage.getItem('theme')||'dark')==='dark'?'light':'dark');apply()}
 function toggleGlass(){localStorage.setItem('glass',(localStorage.getItem('glass')||'glass')==='glass'?'solid':'glass');apply()}
