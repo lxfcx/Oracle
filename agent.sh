@@ -10,14 +10,13 @@ SID=""
 NAME="server"
 INTERVAL="5"
 
-# 兼容旧命令参数：--token / --chat 会被接收但不会使用，避免探针自己发 TG 消息。
 while [ $# -gt 0 ]; do
   case "$1" in
-    --url) URL="$2"; shift 2 ;;
-    --secret) SECRET="$2"; shift 2 ;;
-    --sid) SID="$2"; shift 2 ;;
-    --name) NAME="$2"; shift 2 ;;
-    --interval) INTERVAL="$2"; shift 2 ;;
+    --url) URL="${2:-}"; shift 2 ;;
+    --secret) SECRET="${2:-}"; shift 2 ;;
+    --sid) SID="${2:-}"; shift 2 ;;
+    --name) NAME="${2:-server}"; shift 2 ;;
+    --interval) INTERVAL="${2:-5}"; shift 2 ;;
     --token) shift 2 ;;
     --chat) shift 2 ;;
     *) shift ;;
@@ -43,19 +42,12 @@ import time
 import json
 import socket
 import urllib.request
-import subprocess
 
 URL = os.environ.get("AGENT_URL", "")
 SECRET = os.environ.get("AGENT_SECRET", "")
 SID = os.environ.get("SERVER_ID", "")
 NAME = os.environ.get("SERVER_NAME", "server")
-INTERVAL = int(os.environ.get("INTERVAL", "5"))
-
-def sh(cmd):
-    try:
-        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, timeout=8).decode(errors="ignore").strip()
-    except Exception:
-        return ""
+INTERVAL = int(os.environ.get("INTERVAL", "5") or "5")
 
 def uptime_seconds():
     try:
@@ -71,16 +63,23 @@ def boot_time_text(up):
 
 def cpu_cores():
     try:
-        return os.cpu_count() or int(sh("nproc") or "0")
+        return os.cpu_count() or 0
     except Exception:
         return 0
 
-def mem_info():
+def meminfo():
+    data = {}
     try:
-        data = {}
         for line in open("/proc/meminfo"):
             k, v = line.split(":", 1)
             data[k] = int(v.strip().split()[0]) * 1024
+    except Exception:
+        pass
+    return data
+
+def mem_info():
+    try:
+        data = meminfo()
         total = data.get("MemTotal", 0)
         avail = data.get("MemAvailable", 0)
         used = max(0, total - avail)
@@ -91,10 +90,7 @@ def mem_info():
 
 def swap_info():
     try:
-        data = {}
-        for line in open("/proc/meminfo"):
-            k, v = line.split(":", 1)
-            data[k] = int(v.strip().split()[0]) * 1024
+        data = meminfo()
         total = data.get("SwapTotal", 0)
         free = data.get("SwapFree", 0)
         used = max(0, total - free)
@@ -191,7 +187,7 @@ def collect():
     }
 
 def main():
-    print("server-monitor-agent started silently; no Telegram startup push", flush=True)
+    print("server-monitor-agent realtime reporter started", flush=True)
     while True:
         try:
             data = collect()
@@ -204,11 +200,12 @@ def main():
                 "mem", data.get("mem_percent"),
                 "swap", data.get("swap_percent"),
                 "disk", data.get("disk_percent"),
+                "cores", data.get("cpu_cores"),
                 flush=True
             )
         except Exception as e:
             print("report failed", e, flush=True)
-        time.sleep(INTERVAL)
+        time.sleep(max(1, INTERVAL))
 
 if __name__ == "__main__":
     main()
@@ -231,7 +228,7 @@ Environment="SERVER_NAME=$NAME"
 Environment="INTERVAL=$INTERVAL"
 ExecStart=/usr/bin/python3 $APP_DIR/agent.py
 Restart=always
-RestartSec=5
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
@@ -242,7 +239,6 @@ systemctl enable --now "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
 echo "✅ 探针安装/更新完成"
-echo "📌 新版探针为静默上报，不会推送启动消息到 TG"
-echo "📌 默认每 ${INTERVAL} 秒上报 CPU/内存/SWAP/硬盘/流量/运行时长"
+echo "📌 新版探针每 ${INTERVAL} 秒上报一次 CPU/内存/SWAP/硬盘/流量/运行时长"
 echo "📌 查看状态：systemctl status $SERVICE_NAME --no-pager -l"
 echo "📌 查看日志：journalctl -u $SERVICE_NAME -f"
