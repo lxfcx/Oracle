@@ -16,7 +16,7 @@ while [ $# -gt 0 ]; do
     --secret) SECRET="${2:-}"; shift 2 ;;
     --sid) SID="${2:-}"; shift 2 ;;
     --name) NAME="${2:-server}"; shift 2 ;;
-    --interval) INTERVAL="${2:-5}"; shift 2 ;;
+    --interval) INTERVAL="${2:-2}"; shift 2 ;;
     --token) shift 2 ;;
     --chat) shift 2 ;;
     *) shift ;;
@@ -48,6 +48,8 @@ SECRET = os.environ.get("AGENT_SECRET", "")
 SID = os.environ.get("SERVER_ID", "")
 NAME = os.environ.get("SERVER_NAME", "server")
 INTERVAL = int(os.environ.get("INTERVAL", "2") or "2")
+
+PUBLIC_IP_CACHE = {"t": 0, "v": ""}
 
 def uptime_seconds():
     try:
@@ -141,14 +143,27 @@ def net_bytes():
         pass
     return rx, tx
 
+def loads():
+    try:
+        a,b,c = os.getloadavg()
+        return round(a, 2), round(b, 2), round(c, 2)
+    except Exception:
+        return 0, 0, 0
+
 def public_ip():
+    now = time.time()
+    if PUBLIC_IP_CACHE["v"] and now - PUBLIC_IP_CACHE["t"] < 600:
+        return PUBLIC_IP_CACHE["v"]
     for url in ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]:
         try:
             with urllib.request.urlopen(url, timeout=5) as r:
-                return r.read().decode().strip().splitlines()[0]
+                ip = r.read().decode().strip().splitlines()[0]
+                PUBLIC_IP_CACHE["t"] = now
+                PUBLIC_IP_CACHE["v"] = ip
+                return ip
         except Exception:
             pass
-    return ""
+    return PUBLIC_IP_CACHE["v"]
 
 def post_json(url, data):
     raw = json.dumps(data).encode("utf-8")
@@ -162,6 +177,7 @@ def collect():
     mem_total, mem_used, mem_percent = mem_info()
     swap_total, swap_used, swap_percent = swap_info()
     disk_total, disk_used, disk_percent = disk_info()
+    load1, load5, load15 = loads()
     return {
         "secret": SECRET,
         "server_id": SID,
@@ -172,6 +188,9 @@ def collect():
         "boot_time": boot_time_text(up),
         "cpu_cores": cpu_cores(),
         "cpu_percent": cpu_percent(),
+        "load1": load1,
+        "load5": load5,
+        "load15": load15,
         "mem_total": mem_total,
         "mem_used": mem_used,
         "mem_percent": mem_percent,
@@ -192,17 +211,7 @@ def main():
         try:
             data = collect()
             post_json(URL, data)
-            print(
-                "report ok",
-                time.strftime("%F %T"),
-                "sid", SID,
-                "cpu", data.get("cpu_percent"),
-                "mem", data.get("mem_percent"),
-                "swap", data.get("swap_percent"),
-                "disk", data.get("disk_percent"),
-                "cores", data.get("cpu_cores"),
-                flush=True
-            )
+            print("report ok", time.strftime("%F %T"), "sid", SID, "cpu", data["cpu_percent"], "mem", data["mem_percent"], "disk", data["disk_percent"], "rx", data["rx_bytes"], "tx", data["tx_bytes"], "load", data["load1"], data["load5"], data["load15"], "cores", data["cpu_cores"], flush=True)
         except Exception as e:
             print("report failed", e, flush=True)
         time.sleep(max(1, INTERVAL))
@@ -239,6 +248,6 @@ systemctl enable --now "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
 echo "✅ 探针安装/更新完成"
-echo "📌 新版探针每 ${INTERVAL} 秒上报一次 CPU/内存/SWAP/硬盘/流量/运行时长"
+echo "📌 每 ${INTERVAL} 秒上报：CPU/内存/SWAP/硬盘/网络速率基础数据/总流量/负载/运行时长"
 echo "📌 查看状态：systemctl status $SERVICE_NAME --no-pager -l"
 echo "📌 查看日志：journalctl -u $SERVICE_NAME -f"
