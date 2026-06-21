@@ -128,9 +128,144 @@ def init_db():
         "expire_at": "",
     }.items():
         conn.execute("INSERT OR IGNORE INTO local_profile(key, value) VALUES(?,?)", (k, v))
+    for col, definition in [
+        ("name", "TEXT DEFAULT ''"),
+        ("hostname", "TEXT DEFAULT ''"),
+        ("public_ip", "TEXT DEFAULT ''"),
+        ("uptime_seconds", "INTEGER DEFAULT 0"),
+        ("boot_time", "TEXT DEFAULT ''"),
+        ("cpu_percent", "REAL DEFAULT 0"),
+        ("mem_percent", "REAL DEFAULT 0"),
+        ("disk_percent", "REAL DEFAULT 0"),
+        ("swap_percent", "REAL DEFAULT 0"),
+        ("rx_bytes", "INTEGER DEFAULT 0"),
+        ("tx_bytes", "INTEGER DEFAULT 0"),
+        ("cpu_cores", "INTEGER DEFAULT 0"),
+        ("mem_total", "INTEGER DEFAULT 0"),
+        ("mem_used", "INTEGER DEFAULT 0"),
+        ("swap_total", "INTEGER DEFAULT 0"),
+        ("swap_used", "INTEGER DEFAULT 0"),
+        ("disk_total", "INTEGER DEFAULT 0"),
+        ("disk_used", "INTEGER DEFAULT 0"),
+        ("updated_at", "TEXT DEFAULT ''"),
+        ("raw", "TEXT DEFAULT ''"),
+    ]:
+        try:
+            ensure_column(conn, "server_metrics", col, definition)
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
+
+# ===== REALTIME METRICS RECEIVER PATCH =====
+def to_int(v):
+    try:
+        return int(float(v or 0))
+    except Exception:
+        return 0
+
+def to_float(v):
+    try:
+        return float(v or 0)
+    except Exception:
+        return 0.0
+
+def save_agent_metrics(payload):
+    sid = to_int(payload.get("server_id"))
+    if not sid:
+        return False
+    conn = db()
+    try:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS server_metrics (
+            server_id INTEGER PRIMARY KEY,
+            name TEXT DEFAULT '',
+            hostname TEXT DEFAULT '',
+            public_ip TEXT DEFAULT '',
+            uptime_seconds INTEGER DEFAULT 0,
+            boot_time TEXT DEFAULT '',
+            cpu_percent REAL DEFAULT 0,
+            mem_percent REAL DEFAULT 0,
+            disk_percent REAL DEFAULT 0,
+            swap_percent REAL DEFAULT 0,
+            rx_bytes INTEGER DEFAULT 0,
+            tx_bytes INTEGER DEFAULT 0,
+            cpu_cores INTEGER DEFAULT 0,
+            mem_total INTEGER DEFAULT 0,
+            mem_used INTEGER DEFAULT 0,
+            swap_total INTEGER DEFAULT 0,
+            swap_used INTEGER DEFAULT 0,
+            disk_total INTEGER DEFAULT 0,
+            disk_used INTEGER DEFAULT 0,
+            updated_at TEXT DEFAULT '',
+            raw TEXT DEFAULT ''
+        )
+        """)
+        for col, definition in [
+            ("name", "TEXT DEFAULT ''"),
+            ("hostname", "TEXT DEFAULT ''"),
+            ("public_ip", "TEXT DEFAULT ''"),
+            ("uptime_seconds", "INTEGER DEFAULT 0"),
+            ("boot_time", "TEXT DEFAULT ''"),
+            ("cpu_percent", "REAL DEFAULT 0"),
+            ("mem_percent", "REAL DEFAULT 0"),
+            ("disk_percent", "REAL DEFAULT 0"),
+            ("swap_percent", "REAL DEFAULT 0"),
+            ("rx_bytes", "INTEGER DEFAULT 0"),
+            ("tx_bytes", "INTEGER DEFAULT 0"),
+            ("cpu_cores", "INTEGER DEFAULT 0"),
+            ("mem_total", "INTEGER DEFAULT 0"),
+            ("mem_used", "INTEGER DEFAULT 0"),
+            ("swap_total", "INTEGER DEFAULT 0"),
+            ("swap_used", "INTEGER DEFAULT 0"),
+            ("disk_total", "INTEGER DEFAULT 0"),
+            ("disk_used", "INTEGER DEFAULT 0"),
+            ("updated_at", "TEXT DEFAULT ''"),
+            ("raw", "TEXT DEFAULT ''"),
+        ]:
+            ensure_column(conn, "server_metrics", col, definition)
+        conn.execute("""
+        INSERT OR REPLACE INTO server_metrics(
+            server_id,name,hostname,public_ip,uptime_seconds,boot_time,
+            cpu_percent,mem_percent,disk_percent,swap_percent,
+            rx_bytes,tx_bytes,cpu_cores,
+            mem_total,mem_used,swap_total,swap_used,disk_total,disk_used,
+            updated_at,raw
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            sid,
+            str(payload.get("name") or ""),
+            str(payload.get("hostname") or ""),
+            str(payload.get("public_ip") or ""),
+            to_int(payload.get("uptime_seconds")),
+            str(payload.get("boot_time") or ""),
+            to_float(payload.get("cpu_percent")),
+            to_float(payload.get("mem_percent")),
+            to_float(payload.get("disk_percent")),
+            to_float(payload.get("swap_percent")),
+            to_int(payload.get("rx_bytes")),
+            to_int(payload.get("tx_bytes")),
+            to_int(payload.get("cpu_cores")),
+            to_int(payload.get("mem_total")),
+            to_int(payload.get("mem_used")),
+            to_int(payload.get("swap_total")),
+            to_int(payload.get("swap_used")),
+            to_int(payload.get("disk_total")),
+            to_int(payload.get("disk_used")),
+            now_text(),
+            json.dumps(payload, ensure_ascii=False),
+        ))
+        try:
+            conn.execute("INSERT OR REPLACE INTO server_status(server_id,last_status,last_checked_at,last_changed_at) VALUES(?,?,?,COALESCE((SELECT last_changed_at FROM server_status WHERE server_id=?),?))",
+                         (sid, "online", now_text(), sid, now_text()))
+        except Exception:
+            pass
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+# ===== END REALTIME METRICS RECEIVER PATCH =====
 
 def tg(method, payload=None):
     try:
