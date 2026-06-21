@@ -138,6 +138,9 @@ def init_db():
         ("mem_percent", "REAL DEFAULT 0"),
         ("disk_percent", "REAL DEFAULT 0"),
         ("swap_percent", "REAL DEFAULT 0"),
+            ("load1", "REAL DEFAULT 0"),
+            ("load5", "REAL DEFAULT 0"),
+            ("load15", "REAL DEFAULT 0"),
         ("rx_bytes", "INTEGER DEFAULT 0"),
         ("tx_bytes", "INTEGER DEFAULT 0"),
         ("cpu_cores", "INTEGER DEFAULT 0"),
@@ -212,6 +215,9 @@ def save_agent_metrics(payload):
             ("mem_percent", "REAL DEFAULT 0"),
             ("disk_percent", "REAL DEFAULT 0"),
             ("swap_percent", "REAL DEFAULT 0"),
+            ("load1", "REAL DEFAULT 0"),
+            ("load5", "REAL DEFAULT 0"),
+            ("load15", "REAL DEFAULT 0"),
             ("rx_bytes", "INTEGER DEFAULT 0"),
             ("tx_bytes", "INTEGER DEFAULT 0"),
             ("cpu_cores", "INTEGER DEFAULT 0"),
@@ -228,11 +234,11 @@ def save_agent_metrics(payload):
         conn.execute("""
         INSERT OR REPLACE INTO server_metrics(
             server_id,name,hostname,public_ip,uptime_seconds,boot_time,
-            cpu_percent,mem_percent,disk_percent,swap_percent,
+            cpu_percent,mem_percent,disk_percent,swap_percent,load1,load5,load15,
             rx_bytes,tx_bytes,cpu_cores,
             mem_total,mem_used,swap_total,swap_used,disk_total,disk_used,
             updated_at,raw
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             sid,
             str(payload.get("name") or ""),
@@ -244,6 +250,9 @@ def save_agent_metrics(payload):
             to_float(payload.get("mem_percent")),
             to_float(payload.get("disk_percent")),
             to_float(payload.get("swap_percent")),
+            to_float(payload.get("load1")),
+            to_float(payload.get("load5")),
+            to_float(payload.get("load15")),
             to_int(payload.get("rx_bytes")),
             to_int(payload.get("tx_bytes")),
             to_int(payload.get("cpu_cores")),
@@ -6437,6 +6446,9 @@ def ensure_metrics_table():
         ("swap_total", "INTEGER DEFAULT 0"),
         ("swap_used", "INTEGER DEFAULT 0"),
         ("swap_percent", "REAL DEFAULT 0"),
+            ("load1", "REAL DEFAULT 0"),
+            ("load5", "REAL DEFAULT 0"),
+            ("load15", "REAL DEFAULT 0"),
         ("disk_total", "INTEGER DEFAULT 0"),
         ("disk_used", "INTEGER DEFAULT 0"),
     ]:
@@ -6478,7 +6490,7 @@ def save_agent_metrics(payload):
         cpu_percent,mem_percent,disk_percent,rx_bytes,tx_bytes,
         cpu_cores,mem_total,mem_used,swap_total,swap_used,swap_percent,disk_total,disk_used,
         updated_at,raw
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         int(sid),
         str(payload.get("name") or ""),
