@@ -597,86 +597,7 @@ def event_context(e):
 
 
 
-# ===== REALTIME METRICS DISPLAY PATCH =====
-def metric_config_html(m):
-    m=m or {}
-    try: cpu=int(m.get('cpu_cores') or 0)
-    except Exception: cpu=0
-    mem=m.get('mem_total') or 0
-    swap=m.get('swap_total') or 0
-    disk=m.get('disk_total') or 0
-    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt(mem) if mem else '未知'} ｜ 🔄 {fmt(swap) if swap else '无'} ｜ 💾 {fmt(disk) if disk else '未知'}"
 
-def metric_json(x):
-    m=x.get('metrics') or {}
-    def f(v):
-        try: return float(v or 0)
-        except Exception: return 0.0
-    def i(v):
-        try: return int(float(v or 0))
-        except Exception: return 0
-    return {
-        'id':x.get('id'),
-        'flag':server_flag(x),
-        'online':bool(x.get('online')),
-        'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知',
-        'uptime':dur(m.get('uptime_seconds') or 0),
-        'cpu':f(m.get('cpu_percent')),
-        'mem':f(m.get('mem_percent')),
-        'swap':f(m.get('swap_percent')),
-        'disk':f(m.get('disk_percent')),
-        'cpu_cores':i(m.get('cpu_cores')),
-        'mem_total':i(m.get('mem_total')),
-        'mem_used':i(m.get('mem_used')),
-        'swap_total':i(m.get('swap_total')),
-        'swap_used':i(m.get('swap_used')),
-        'disk_total':i(m.get('disk_total')),
-        'disk_used':i(m.get('disk_used')),
-        'updated_at':m.get('updated_at') or '',
-        'config_html':metric_config_html(m),
-    }
-# ===== END REALTIME METRICS DISPLAY PATCH =====
-
-# ===== REALTIME WEB PATCH =====
-def metric_config_html(m):
-    m=m or {}
-    def iv(v):
-        try: return int(float(v or 0))
-        except Exception: return 0
-    cpu=iv(m.get('cpu_cores'))
-    mem=iv(m.get('mem_total'))
-    swap=iv(m.get('swap_total'))
-    disk=iv(m.get('disk_total'))
-    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt(mem) if mem else '未知'} ｜ 🔄 {fmt(swap) if swap else '无'} ｜ 💾 {fmt(disk) if disk else '未知'}"
-
-def metric_json(x):
-    m=x.get('metrics') or {}
-    def f(v):
-        try: return float(v or 0)
-        except Exception: return 0.0
-    def i(v):
-        try: return int(float(v or 0))
-        except Exception: return 0
-    return {
-        'id':x.get('id'),
-        'online':bool(x.get('online')),
-        'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知',
-        'uptime':dur(m.get('uptime_seconds') or 0),
-        'cpu':f(m.get('cpu_percent')),
-        'mem':f(m.get('mem_percent')),
-        'swap':f(m.get('swap_percent')),
-        'disk':f(m.get('disk_percent')),
-        'cpu_cores':i(m.get('cpu_cores')),
-        'mem_total':i(m.get('mem_total')),
-        'mem_used':i(m.get('mem_used')),
-        'swap_total':i(m.get('swap_total')),
-        'swap_used':i(m.get('swap_used')),
-        'disk_total':i(m.get('disk_total')),
-        'disk_used':i(m.get('disk_used')),
-        'updated_at':m.get('updated_at') or '',
-        'config_html':metric_config_html(m),
-    }
-# ===== END REALTIME WEB PATCH =====
 
 # ===== FREE LABEL FIX PATCH =====
 def display_price_label(row):
@@ -694,7 +615,9 @@ def display_price_expire(row):
 # ===== END FREE LABEL FIX PATCH =====
 
 
-# ===== KOMARI STYLE REALTIME PATCH =====
+
+
+# ===== FINAL ACCURATE METRICS SOURCE PATCH =====
 def metric_config_html(m):
     m=m or {}
     def iv(v):
@@ -706,6 +629,12 @@ def metric_config_html(m):
     disk=iv(m.get('disk_total'))
     return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt(mem) if mem else '未知'} ｜ 🔄 {fmt(swap) if swap else '无'} ｜ 💾 {fmt(disk) if disk else '未知'}"
 
+def metric_is_fresh(m, max_age=15):
+    try:
+        return (datetime.now()-pdt((m or {}).get('updated_at'))).total_seconds() <= max_age
+    except Exception:
+        return False
+
 def metric_json(x):
     m=x.get('metrics') or {}
     def f(v):
@@ -714,10 +643,17 @@ def metric_json(x):
     def i(v):
         try: return int(float(v or 0))
         except Exception: return 0
+    fresh_now=metric_is_fresh(m, 15)
     return {
         'id':x.get('id'),
+        'name':x.get('name') or '',
+        'host':x.get('host') or '',
+        'metric_name':m.get('name') or '',
+        'hostname':m.get('hostname') or '',
+        'public_ip':m.get('public_ip') or '',
         'online':bool(x.get('online')),
         'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知',
+        'fresh':fresh_now,
         'uptime':dur(m.get('uptime_seconds') or 0),
         'cpu':f(m.get('cpu_percent')),
         'mem':f(m.get('mem_percent')),
@@ -732,8 +668,9 @@ def metric_json(x):
         'disk_used':i(m.get('disk_used')),
         'updated_at':m.get('updated_at') or '',
         'config_html':metric_config_html(m),
+        'source_html':f"📡 探针：{html.escape(str(m.get('hostname') or m.get('name') or '未知'))} ｜ IP：{html.escape(str(m.get('public_ip') or x.get('host') or '未知'))} ｜ 上报：{html.escape(str(m.get('updated_at') or '未知'))}",
     }
-# ===== END KOMARI STYLE REALTIME PATCH =====
+# ===== END FINAL ACCURATE METRICS SOURCE PATCH =====
 
 LOGIN='''<!doctype html><html><head><meta charset=utf-8><script>(function(){let t=localStorage.getItem('theme')||'dark',g=localStorage.getItem('glass')||'glass';document.documentElement.classList.toggle('light',t==='light');document.documentElement.classList.toggle('solid',g==='solid')})();</script><meta name=viewport content="width=device-width,initial-scale=1"><title>登录</title><link id="favLink" rel="icon" href="/favicon.ico?v=login"><style>
 :root{--text:#edf5ff;--muted:#9fb0c7;--line:#ffffff28;--glass:#ffffff16;--glass2:#ffffff28;--a:#6ee7ff;--b:#a78bfa;--shadow:#0008}
@@ -832,6 +769,16 @@ html.light .muted,html.light .small,html.light .label,html.light .table th{color
 @keyframes barFlow{to{left:110%}}
 .server-title .dot.online{animation:dotPulse 1.45s ease-in-out infinite}
 @keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
+
+
+/* accurate realtime data patch */
+.bar{transition:width .75s cubic-bezier(.22,.61,.36,1),background .2s ease!important;position:relative;overflow:hidden}
+.bar:after{content:"";position:absolute;top:0;bottom:0;width:45%;left:-55%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.42),transparent);animation:barFlow 1.4s linear infinite}
+@keyframes barFlow{to{left:110%}}
+.server-title .dot.online{animation:dotPulse 1.45s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
+.metric-source{margin-top:7px;font-size:12px;color:var(--muted);font-weight:850;line-height:1.55}
+.metric-source.stale{color:var(--yellow)!important}
 
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
@@ -970,6 +917,49 @@ function paintServer(s){
     e.classList.toggle('offline',!s.online);
   });
 }
+function fmtBytes(n){
+  n=Number(n||0);
+  if(!n)return '0B';
+  let u=['B','KB','MB','GB','TB','PB'];
+  let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++;}
+  return n.toFixed(1)+u[i];
+}
+function qsAll(sel){return Array.from(document.querySelectorAll(sel));}
+function setText(sel,txt){qsAll(sel).forEach(e=>e.textContent=txt);}
+function setHtml(sel,txt){qsAll(sel).forEach(e=>e.innerHTML=txt);}
+function setBar(id,key,val){
+  let v=Number(val||0);
+  qsAll('[data-'+key+'="'+id+'"]').forEach(e=>{
+    e.style.width=Math.max(0,Math.min(100,v))+'%';
+    e.classList.toggle('bad',v>=80);
+    e.classList.toggle('warn',v>=50&&v<80);
+  });
+  setText('[data-'+key+'txt="'+id+'"]',Math.round(v)+'%');
+}
+function paintServer(s){
+  setBar(s.id,'cpu',s.cpu);
+  setBar(s.id,'mem',s.mem);
+  setBar(s.id,'swap',s.swap);
+  setBar(s.id,'disk',s.disk);
+  setText('[data-uptime="'+s.id+'"]',s.uptime||'未知');
+  setText('[data-status="'+s.id+'"]',(s.online?'🟢 ':'🔴 ')+(s.status||'未知'));
+  setHtml('[data-hw="'+s.id+'"]',s.config_html||'');
+  setHtml('[data-source="'+s.id+'"]',s.source_html||'');
+  qsAll('[data-source="'+s.id+'"]').forEach(e=>e.classList.toggle('stale',!s.fresh));
+  setText('[data-cpucores="'+s.id+'"]',(s.cpu_cores||'?')+' Cores');
+  setText('[data-memused="'+s.id+'"]',fmtBytes(s.mem_used));
+  setText('[data-memtotal="'+s.id+'"]',fmtBytes(s.mem_total));
+  setText('[data-swapused="'+s.id+'"]',fmtBytes(s.swap_used));
+  setText('[data-swaptotal="'+s.id+'"]',s.swap_total?fmtBytes(s.swap_total):'无');
+  setText('[data-diskused="'+s.id+'"]',fmtBytes(s.disk_used));
+  setText('[data-disktotal="'+s.id+'"]',fmtBytes(s.disk_total));
+  setText('[data-updated="'+s.id+'"]',s.updated_at||'未知');
+  qsAll('[data-live-dot="'+s.id+'"]').forEach(e=>{
+    e.classList.toggle('online',!!s.online);
+    e.classList.toggle('offline',!s.online);
+  });
+}
 async function live(){
   try{
     let r=await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store'});
@@ -1004,7 +994,7 @@ DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><bu
 <div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('SWAP',0,'localswap',local.swap_percent or 0,80)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}</div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
 <div class=card style="margin-top:16px"><h2>🖥️ 所有服务器</h2>
 <div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}
-<div class="card servercard"><h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
+<div class="card servercard"><h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><div class="metric-source" data-source="{{s.id}}">📡 探针：{{m.hostname or m.name or "未知"}} ｜ IP：{{m.public_ip or s.host}} ｜ 上报：{{m.updated_at or "未知"}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
 {% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>
 <div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态/在线时长</th><th>资源进度</th><th>费用/到期</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=5>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>
 <div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td class="event-content">{{clean_event_html(e.content)|safe}}{% set ctx=event_context(e) %}{% if ctx %}<div class="event-context">{{ctx|safe}}</div>{% endif %}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>'''
@@ -1018,7 +1008,7 @@ SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><bu
 <h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3>
 <div class=meta><span class=badge>#{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div>
-<div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div>
+<div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><div class="metric-source" data-source="{{s.id}}">📡 探针：{{m.hostname or m.name or "未知"}} ｜ IP：{{m.public_ip or s.host}} ｜ 上报：{{m.updated_at or "未知"}}</div>
 <hr>
 {{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}
 {{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}
