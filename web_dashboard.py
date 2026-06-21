@@ -54,7 +54,9 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS servers(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,host TEXT NOT NULL,note TEXT DEFAULT '',cycle TEXT DEFAULT 'monthly',price REAL DEFAULT 0,currency TEXT DEFAULT 'USD',expire_at TEXT NOT NULL,check_port INTEGER DEFAULT 22,created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
     for col,d in [('country',"TEXT DEFAULT ''"),('country_code',"TEXT DEFAULT ''"),('region',"TEXT DEFAULT ''"),('city',"TEXT DEFAULT ''"),('isp',"TEXT DEFAULT ''"),('os_name',"TEXT DEFAULT ''"),('last_meta_at',"TEXT DEFAULT ''"),('free_forever','INTEGER DEFAULT 0'),('auto_renew','INTEGER DEFAULT 0'),('cpu_alert','REAL DEFAULT 90'),('mem_alert','REAL DEFAULT 90'),('disk_alert','REAL DEFAULT 90')]: ensure_col(c,'servers',col,d)
     c.execute("""CREATE TABLE IF NOT EXISTS server_status(server_id INTEGER PRIMARY KEY,last_status TEXT DEFAULT 'unknown',last_checked_at TEXT,last_changed_at TEXT,fail_count INTEGER DEFAULT 0,success_count INTEGER DEFAULT 0,notified_offline INTEGER DEFAULT 0,first_fail_at TEXT DEFAULT '',first_recover_at TEXT DEFAULT '',online_since TEXT DEFAULT '',offline_since TEXT DEFAULT '')""")
-    c.execute("""CREATE TABLE IF NOT EXISTS server_metrics(server_id INTEGER PRIMARY KEY,name TEXT DEFAULT '',hostname TEXT DEFAULT '',public_ip TEXT DEFAULT '',uptime_seconds INTEGER DEFAULT 0,boot_time TEXT DEFAULT '',cpu_percent REAL DEFAULT 0,mem_percent REAL DEFAULT 0,disk_percent REAL DEFAULT 0,rx_bytes INTEGER DEFAULT 0,tx_bytes INTEGER DEFAULT 0,cpu_cores INTEGER DEFAULT 0,mem_total INTEGER DEFAULT 0,disk_total INTEGER DEFAULT 0,disk_used INTEGER DEFAULT 0,mem_used INTEGER DEFAULT 0,updated_at TEXT DEFAULT '',raw TEXT DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS server_metrics(server_id INTEGER PRIMARY KEY,name TEXT DEFAULT '',hostname TEXT DEFAULT '',public_ip TEXT DEFAULT '',uptime_seconds INTEGER DEFAULT 0,boot_time TEXT DEFAULT '',cpu_percent REAL DEFAULT 0,mem_percent REAL DEFAULT 0,disk_percent REAL DEFAULT 0,rx_bytes INTEGER DEFAULT 0,tx_bytes INTEGER DEFAULT 0,cpu_cores INTEGER DEFAULT 0,mem_total INTEGER DEFAULT 0,disk_total INTEGER DEFAULT 0,disk_used INTEGER DEFAULT 0,mem_used INTEGER DEFAULT 0,swap_total INTEGER DEFAULT 0,swap_used INTEGER DEFAULT 0,swap_percent REAL DEFAULT 0,updated_at TEXT DEFAULT '',raw TEXT DEFAULT '')""")
+    for col,d in [('swap_total','INTEGER DEFAULT 0'),('swap_used','INTEGER DEFAULT 0'),('swap_percent','REAL DEFAULT 0')]: ensure_col(c,'server_metrics',col,d)
+
     c.execute("""CREATE TABLE IF NOT EXISTS metric_alert_state(server_id INTEGER,metric TEXT,active INTEGER DEFAULT 0,last_value REAL DEFAULT 0,threshold REAL DEFAULT 0,last_sent_at TEXT DEFAULT '',PRIMARY KEY(server_id,metric))""")
     c.execute("""CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,event_type TEXT DEFAULT '',title TEXT DEFAULT '',content TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
     c.execute("""CREATE TABLE IF NOT EXISTS reminders(server_id INTEGER,remind_key TEXT,sent_at TEXT,PRIMARY KEY(server_id,remind_key))""")
@@ -175,7 +177,7 @@ def logout(): session.clear(); return redirect(url_for('login'))
 def local_status():
     if not psutil: return {}
     mem=psutil.virtual_memory(); disk=psutil.disk_usage('/')
-    return {'hostname':socket.gethostname(),'public_ip':public_ip(),'uptime':dur(time.time()-psutil.boot_time()),'cpu':psutil.cpu_percent(interval=0.1),'cpu_count':psutil.cpu_count() or 0,'mem_used':mem.used,'mem_total':mem.total,'mem_percent':mem.percent,'disk_used':disk.used,'disk_total':disk.total,'disk_percent':disk.percent}
+    sw=psutil.swap_memory(); return {'hostname':socket.gethostname(),'public_ip':public_ip(),'uptime':dur(time.time()-psutil.boot_time()),'cpu':psutil.cpu_percent(interval=0.1),'cpu_count':psutil.cpu_count() or 0,'mem_used':mem.used,'mem_total':mem.total,'mem_percent':mem.percent,'swap_used':sw.used,'swap_total':sw.total,'swap_percent':sw.percent,'disk_used':disk.used,'disk_total':disk.total,'disk_percent':disk.percent}
 def lprof():
     c=db()
     try: d={r['key']:r['value'] for r in c.execute('SELECT key,value FROM local_profile').fetchall()}
@@ -435,7 +437,7 @@ def settings_page():
 @login_required
 def api_servers_live():
     ss=all_servers()
-    return jsonify({'time':now(),'servers':[{'id':x.get('id'),'flag':server_flag(x),'online':bool(x.get('online')),'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知','uptime':dur((x.get('metrics') or {}).get('uptime_seconds') or 0),'cpu':float((x.get('metrics') or {}).get('cpu_percent') or 0),'mem':float((x.get('metrics') or {}).get('mem_percent') or 0),'disk':float((x.get('metrics') or {}).get('disk_percent') or 0)} for x in ss]})
+    return jsonify({'time':now(),'servers':[metric_json(x) for x in ss]})
 # ===== END WEB V3 FIX HELPERS =====
 
 
@@ -477,7 +479,7 @@ def progress_row(label, sid, key, value, limit=90):
         lim=float(limit or 90)
     except Exception:
         lim=90
-    cls='bad' if v>=lim else 'warn' if v>=70 else ''
+    cls='bad' if v>=80 else 'warn' if v>=50 else ''
     return f'''<div class="progressrow"><span>{html.escape(str(label))}</span><div class="progress"><div class="bar {cls}" data-{key}="{sid}" data-limit="{lim:g}" style="width:{v:g}%"></div></div><b data-{key}txt="{sid}">{v:.0f}%</b></div>'''
 # ===== END FINAL PATCH =====
 
@@ -590,6 +592,47 @@ def event_context(e):
 # ===== END EVENT DISPLAY PATCH =====
 
 
+# ===== REALTIME METRICS DISPLAY PATCH =====
+def metric_config_html(m):
+    try:
+        cpu=int((m or {}).get('cpu_cores') or 0)
+    except Exception:
+        cpu=0
+    mem=(m or {}).get('mem_total') or 0
+    swap=(m or {}).get('swap_total') or 0
+    disk=(m or {}).get('disk_total') or 0
+    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt(mem) if mem else '未知'} ｜ 🔄 {fmt(swap) if swap else '无'} ｜ 💾 {fmt(disk) if disk else '未知'}"
+
+def metric_json(x):
+    m=x.get('metrics') or {}
+    def f(v):
+        try: return float(v or 0)
+        except Exception: return 0.0
+    def i(v):
+        try: return int(float(v or 0))
+        except Exception: return 0
+    return {
+        'id':x.get('id'),
+        'flag':server_flag(x),
+        'online':bool(x.get('online')),
+        'status':'在线' if x.get('online') else '离线' if x.get('status',{}).get('last_status')=='offline' else '未知',
+        'uptime':dur(m.get('uptime_seconds') or 0),
+        'cpu':f(m.get('cpu_percent')),
+        'mem':f(m.get('mem_percent')),
+        'swap':f(m.get('swap_percent')),
+        'disk':f(m.get('disk_percent')),
+        'cpu_cores':i(m.get('cpu_cores')),
+        'mem_total':i(m.get('mem_total')),
+        'mem_used':i(m.get('mem_used')),
+        'swap_total':i(m.get('swap_total')),
+        'swap_used':i(m.get('swap_used')),
+        'disk_total':i(m.get('disk_total')),
+        'disk_used':i(m.get('disk_used')),
+        'updated_at':m.get('updated_at') or '',
+        'config_html':metric_config_html(m),
+    }
+# ===== END REALTIME METRICS DISPLAY PATCH =====
+
 # ===== FREE LABEL FIX PATCH =====
 def display_price_label(row):
     if truth((row or {}).get('free_forever')):
@@ -671,9 +714,42 @@ html.light .muted,html.light .small,html.light .label,html.light .table th{color
 
 
 
+
+/* sidebar collapse patch */
+.side-toggle{position:absolute;right:-16px;top:20px;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,var(--blue),var(--purple));color:#07111f;border:0;box-shadow:0 8px 26px var(--shadow);z-index:5}
+.layout.nav-collapsed{grid-template-columns:88px 1fr}
+.layout.nav-collapsed .side{padding:18px 12px}
+.layout.nav-collapsed .brand{justify-content:center}
+.layout.nav-collapsed .brand b,.layout.nav-collapsed .side .small,.layout.nav-collapsed .switches{display:none!important}
+.layout.nav-collapsed .brand .ico{width:52px;height:52px}
+.layout.nav-collapsed .nav a{justify-content:center;font-size:0;padding:14px 8px}
+.layout.nav-collapsed .nav a::first-letter{font-size:20px}
+.layout.nav-collapsed .nav a{overflow:hidden}
+.layout.nav-collapsed .nav a::before{font-size:20px}
+@media(max-width:1100px){.side-toggle{display:none}.layout.nav-collapsed{grid-template-columns:1fr}.layout.nav-collapsed .side .small,.layout.nav-collapsed .switches,.layout.nav-collapsed .brand b{display:block!important}.layout.nav-collapsed .nav a{font-size:inherit;justify-content:flex-start}}
+
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
 
+
+
+function toggleSidebar(){
+  let layout=document.querySelector('.layout');
+  if(!layout)return;
+  let yes=!layout.classList.contains('nav-collapsed');
+  layout.classList.toggle('nav-collapsed',yes);
+  localStorage.setItem('navCollapsed',yes?'1':'0');
+  let b=document.getElementById('sideToggle');
+  if(b)b.textContent=yes?'❯':'❮';
+}
+function initSidebar(){
+  let layout=document.querySelector('.layout');
+  if(!layout)return;
+  let yes=localStorage.getItem('navCollapsed')==='1';
+  layout.classList.toggle('nav-collapsed',yes);
+  let b=document.getElementById('sideToggle');
+  if(b)b.textContent=yes?'❯':'❮';
+}
 
 function applyTheme(){
   let theme=localStorage.getItem('theme')||'dark';
@@ -745,22 +821,31 @@ function showToast(msg){
   x.classList.add('show');
   setTimeout(()=>x.classList.remove('show'),2600);
 }
+function fmtBytes(n){n=Number(n||0);if(!n)return '0B';let u=['B','KB','MB','GB','TB','PB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return (n>=10?n.toFixed(1):n.toFixed(1))+u[i];}
 async function live(){
   try{
     let j=await(await fetch('/api/servers-live')).json();
     (j.servers||[]).forEach(s=>{
-      ['cpu','mem','disk'].forEach(k=>{
+      ['cpu','mem','swap','disk'].forEach(k=>{
         let v=Number(s[k]||0);
         document.querySelectorAll('[data-'+k+'="'+s.id+'"]').forEach(e=>{
           let limit=Number(e.dataset.limit||90);
           e.style.width=Math.max(0,Math.min(100,v))+'%';
-          e.classList.toggle('bad',v>=limit);
-          e.classList.toggle('warn',v>=70&&v<limit);
+          e.classList.toggle('bad',v>=80);
+          e.classList.toggle('warn',v>=50&&v<80);
         });
         document.querySelectorAll('[data-'+k+'txt="'+s.id+'"]').forEach(e=>e.textContent=Math.round(v)+'%');
       });
       document.querySelectorAll('[data-uptime="'+s.id+'"]').forEach(e=>e.textContent=s.uptime);
       document.querySelectorAll('[data-status="'+s.id+'"]').forEach(e=>e.textContent=(s.online?'🟢 ':'🔴 ')+s.status);
+      document.querySelectorAll('[data-hw="'+s.id+'"]').forEach(e=>e.innerHTML=s.config_html||e.innerHTML);
+      document.querySelectorAll('[data-memused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.mem_used));
+      document.querySelectorAll('[data-memtotal="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.mem_total));
+      document.querySelectorAll('[data-swapused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.swap_used));
+      document.querySelectorAll('[data-swaptotal="'+s.id+'"]').forEach(e=>e.textContent=s.swap_total?fmtBytes(s.swap_total):'无');
+      document.querySelectorAll('[data-diskused="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.disk_used));
+      document.querySelectorAll('[data-disktotal="'+s.id+'"]').forEach(e=>e.textContent=fmtBytes(s.disk_total));
+      document.querySelectorAll('[data-updated="'+s.id+'"]').forEach(e=>e.textContent=s.updated_at||'未知');
     });
   }catch(e){}
 }
@@ -778,22 +863,23 @@ async function refreshKpi(){
 function delok(){return confirm('确认删除服务器？');}
 document.addEventListener('DOMContentLoaded',()=>{
   applyTheme();
+  initSidebar();
   initView();
   live();
   refreshKpi();
-  setInterval(live,10000);
-  setInterval(refreshKpi,10000);
+  setInterval(live,3000);
+  setInterval(refreshKpi,5000);
 });
 
-</script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><div class=brand><div class=ico>🛡️</div><div><b>{{site_name}}</b></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
+</script></head><body><script>document.body.style.setProperty('--custom-bg',"url('/theme-bg?v={{now}}')");fetch('/theme-bg?v={{now}}',{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg')}).catch(()=>{});</script><div class=layout><aside class=side><button id="sideToggle" class="side-toggle" type="button" onclick="toggleSidebar()">❮</button><div class=brand><div class=ico>🛡️</div><div><b>{{site_name}}</b></div></div><div class=switches><button class=themebtn onclick="toggleTheme()" type=button><span id=themeText>☀️ 日间明亮</span></button><button class=themebtn onclick="toggleGlass()" type=button><span id=glassText>⬛ 实色背景</span></button></div><nav class=nav><a class="{{'active' if active=='dashboard' else ''}}" href="/">📊 总览大屏</a><a class="{{'active' if active=='servers' else ''}}" href="/servers">🖥️ 服务器</a><a class="{{'active' if active=='add' else ''}}" href="/servers/add">➕ 添加服务器</a><a class="{{'active' if active=='local' else ''}}" href="/local">🏠 本机</a><a class="{{'active' if active=='events' else ''}}" href="/events">🧾 事件</a><a class="{{'active' if active=='settings' else ''}}" href="/settings">⚙️ 设置</a><a href="/logout">🚪 退出</a></nav><div class=small style="margin-top:22px">👤 {{username}}<br>🕒 <span data-now>{{now}}</span><br>🌌 星空 · 🧊 玻璃 · 🇺🇳 国旗</div></aside><main class=main>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main></div></body></html>'''
 DASH='''<div class=top><h1>📊✨ 服务器总览大屏</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div>
 <div class=grid><div class="card kpi"><div class=label>📦 总数</div><div class=value data-kpi=total>{{data.total}}</div></div><div class="card kpi"><div class=label>🟢 在线</div><div class="value ok" data-kpi=online>{{data.online}}</div></div><div class="card kpi"><div class=label>🔴 离线</div><div class="value bad" data-kpi=offline>{{data.offline}}</div></div><div class="card kpi"><div class=label>📡 探针在线</div><div class=value data-kpi=probes>{{data.probes}}</div></div></div>
-<div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}</div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
+<div class=grid2 style="margin-top:16px"><div class=card><h2>🏠 本机状态</h2><p><span class=badge>🌐 {{local.public_ip or '未知'}}</span> <span class=badge>🧩 {{local.cpu_count or 0}} 核</span> <span class=badge>⏱️ {{local.uptime or '未知'}}</span></p><hr>{{progress_row('CPU',0,'localcpu',local.cpu or 0,90)|safe}}{{progress_row('内存',0,'localmem',local.mem_percent or 0,90)|safe}}{{progress_row('SWAP',0,'localswap',local.swap_percent or 0,80)|safe}}{{progress_row('硬盘',0,'localdisk',local.disk_percent or 0,90)|safe}}</div><div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div></div>
 <div class=card style="margin-top:16px"><h2>🖥️ 所有服务器</h2>
 <div data-view-card class=cardgrid>{% for s in data.servers %}{% set m=s.metrics %}
-<div class="card servercard"><h3 class="server-title"><span class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small>🧩 {{m.cpu_cores or '?'}}C ｜ 🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} ｜ 💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
+<div class="card servercard"><h3 class="server-title"><span class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3><div class=meta><span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div><div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div><hr>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}<br><a class=btn href="/servers/{{s.id}}">详情</a></div>
 {% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>
-<div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态/在线时长</th><th>资源进度</th><th>费用/到期</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=5>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>
+<div data-view-table class=hidden><table class=table><thead><tr><th>服务器</th><th>状态/在线时长</th><th>资源进度</th><th>费用/到期</th><th>操作</th></tr></thead><tbody>{% for s in data.servers %}{% set m=s.metrics %}<tr><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>ID{{s.id}}｜{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></td><td><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>{% else %}<tr><td colspan=5>📭 暂无服务器</td></tr>{% endfor %}</tbody></table></div></div>
 <div class=card style="margin-top:16px"><h2>🧾 最新事件</h2><div class="scrollbox compact"><table class=table>{% for e in events %}<tr><td><b>{{e.title}}</b><br><span class=muted>{{e.created_at}}｜{{e.event_type}}</span></td><td class="event-content">{{clean_event_html(e.content)|safe}}{% set ctx=event_context(e) %}{% if ctx %}<div class="event-context">{{ctx|safe}}</div>{% endif %}</td></tr>{% else %}<tr><td>暂无事件</td></tr>{% endfor %}</table></div></div>'''
 
 SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><button onclick="setView('card')">🔳 卡片视图</button><button onclick="setView('table')">📋 表格视图</button><a class="btn primary" href="/servers/add">➕ 添加服务器</a><a class=btn href="/">📊 总览</a></div></div>
@@ -805,10 +891,11 @@ SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><bu
 <h3 class="server-title"><span class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3>
 <div class=meta><span class=badge>#{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span><span class=badge data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><span class=badge>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></span></div>
-<div class=small>🧩 {{m.cpu_cores or '?'}}C ｜ 🧠 {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} ｜ 💾 {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</div>
+<div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div>
 <hr>
 {{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}
 {{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}
+{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}
 {{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}
 <br><div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div>
 </div>
@@ -817,12 +904,12 @@ SERVERS='''<div class=top><h1>🖥️✨ 所有服务器</h1><div class=btns><bu
 <div data-view-table class=hidden>
 <table class=table><thead><tr><th>ID</th><th>服务器</th><th>状态/在线时长</th><th>资源进度</th><th>费用/到期</th><th>操作</th></tr></thead><tbody>
 {% for s in data.servers %}{% set m=s.metrics %}
-<tr><td><b>#{{s.id}}</b></td><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span><br><span class=small>{{s.note or '无备注'}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></td><td><div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></td></tr>
+<tr><td><b>#{{s.id}}</b></td><td><b>{{flag_icon(s)|safe}} {{s.name}}</b><br><span class=muted>{{s.host}}:{{s.check_port}}｜{{s.location_cn or s.location}}</span><br><span class=small>{{s.note or '无备注'}}</span></td><td><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br>⏱️ <span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span></td><td>{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}{{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}{{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}</td><td><span class="{{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></td><td><div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></td></tr>
 {% else %}<tr><td colspan=6>📭 暂无服务器</td></tr>{% endfor %}
 </tbody></table>
 </div></div>'''
 
-DETAIL='''<div class=top><h1>🖥️ {{flag_icon(s)|safe}} {{s.name}}</h1><div class=btns><a class=btn href="/servers">📋 返回</a><a class="btn primary" href="/servers/{{s.id}}/edit">✏️ 编辑</a></div></div>{% set m=s.metrics %}<div class=grid3><div class="card kpi"><div class=label>📡 状态</div><div class="value {{'ok' if s.status.last_status=='online' else 'bad' if s.status.last_status=='offline' else ''}}">{{'🟢 在线' if s.status.last_status=='online' else '🔴 离线' if s.status.last_status=='offline' else '⚪ 未知'}}</div><div class=small>{{s.status.last_checked_at or '未知'}}</div></div><div class="card kpi"><div class=label>⏱️ 运行时长</div><div class=value><span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span></div><div class=small>开机：{{m.boot_time or '未知'}}</div></div><div class="card kpi"><div class=label>⏰ 到期</div><div class=value style="font-size:22px">{{expire_text(s.expire_at,s.free_forever)}}</div><div class=small>{{price_text(s)}}｜{{cycle_cn(s.cycle)}}</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>⚙️ 服务器配置</h2><p><span class=badge>🆔 ID {{s.id}}</span> <span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></p><p>🌐 主机：<code>{{s.host}}:{{s.check_port}}</code></p><p>🏢 运营商：{{s.isp or '未知'}}</p><p>🧬 系统：{{s.os_name or '未知系统'}}</p><p>📝 备注：{{s.note or '无'}}</p><hr><div class=grid3><div class=card>🧩 CPU<br><b>{{m.cpu_cores or '?'}} Cores</b></div><div class=card>🧠 内存<br><b>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</b></div><div class=card>💾 硬盘<br><b>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</b></div></div></div><div class=card><h2>📊 资源使用</h2>🔥 CPU <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span> / {{'%.0f'|format(s.cpu_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.cpu_percent or 0,70,s.cpu_alert or 90)}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div><br>🧠 内存 {{fmt_size(m.mem_used or 0) if m.mem_used else '未知'}} / {{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}} (<span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span>) / {{'%.0f'|format(s.mem_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.mem_percent or 0,70,s.mem_alert or 90)}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div><br>💾 硬盘 {{fmt_size(m.disk_used or 0) if m.disk_used else '未知'}} / {{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}} (<span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span>) / {{'%.0f'|format(s.disk_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.disk_percent or 0,70,s.disk_alert or 90)}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div><hr>🌐 流量：⬇️ {{fmt_size(m.rx_bytes or 0)}} / ⬆️ {{fmt_size(m.tx_bytes or 0)}}<br>📡 探针：{{'🟢 在线' if fresh(m) else '🟠 超时/未上报'}}｜{{m.updated_at or '未知'}}</div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📡 一键部署探针</h2><p class=small>复制到这台服务器 SSH 执行，探针静默上报，离线/恢复由主机器人统一推送。</p><pre id="agentcmd">{{s.agent_cmd}}</pre><button class=primary type=button onclick="copyText('agentcmd')">📋 复制探针命令</button><span id="agentcmdok" class=copyok></span></div><div class=card><h2>🛠️ 操作</h2><div class=btns><form method=post action="/servers/{{s.id}}/check"><button class=primary>📡 立即检测</button></form><form method=post action="/servers/{{s.id}}/refresh"><button>🌍 刷新地区</button></form><a class=btn href="/servers/{{s.id}}/edit">✏️ 编辑资料/阈值</a><form method=post action="/servers/{{s.id}}/delete" onsubmit="return delok()"><button class=danger>🗑️ 删除</button></form></div><hr><h3>🎯 告警状态</h3>{% for key,label in [('cpu','🔥 CPU'),('mem','🧠 内存'),('disk','💾 硬盘')] %}{% set st=s.states.get(key) %}<p>{{label}}：{{'🚨 告警中' if st and st.active else '✅ 正常'}}{% if st %}｜上次 {{st.last_value|round(0)}}%｜{{st.last_sent_at}}{% endif %}</p>{% endfor %}</div></div>'''
+DETAIL='''<div class=top><h1>🖥️ {{flag_icon(s)|safe}} {{s.name}}</h1><div class=btns><a class=btn href="/servers">📋 返回</a><a class="btn primary" href="/servers/{{s.id}}/edit">✏️ 编辑</a></div></div>{% set m=s.metrics %}<div class=grid3><div class="card kpi"><div class=label>📡 状态</div><div class="value {{'ok' if s.status.last_status=='online' else 'bad' if s.status.last_status=='offline' else ''}}">{{'🟢 在线' if s.status.last_status=='online' else '🔴 离线' if s.status.last_status=='offline' else '⚪ 未知'}}</div><div class=small>{{s.status.last_checked_at or '未知'}}</div></div><div class="card kpi"><div class=label>⏱️ 运行时长</div><div class=value><span data-uptime='{{s.id}}'>{{duration(m.uptime_seconds or 0)}}</span></div><div class=small>开机：{{m.boot_time or '未知'}}</div></div><div class="card kpi"><div class=label>⏰ 到期</div><div class=value style="font-size:22px">{{expire_text(s.expire_at,s.free_forever)}}</div><div class=small>{{price_text(s)}}｜{{cycle_cn(s.cycle)}}</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>⚙️ 服务器配置</h2><p><span class=badge>🆔 ID {{s.id}}</span> <span class=badge>{{flag_icon(s)|safe}} {{s.location_cn or s.location}}</span></p><p>🌐 主机：<code>{{s.host}}:{{s.check_port}}</code></p><p>🏢 运营商：{{s.isp or '未知'}}</p><p>🧬 系统：{{s.os_name or '未知系统'}}</p><p>📝 备注：{{s.note or '无'}}</p><hr><div class=grid3><div class=card>🧩 CPU<br><b data-cpucores='{{s.id}}'>{{m.cpu_cores or '?'}} Cores</b></div><div class=card>🧠 内存<br><b><span data-memtotal='{{s.id}}'>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</span></b></div><div class=card>🔄 SWAP<br><b><span data-swaptotal='{{s.id}}'>{{fmt_size(m.swap_total or 0) if m.swap_total else '无'}}</span></b></div><div class=card>💾 硬盘<br><b><span data-disktotal='{{s.id}}'>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</span></b></div></div></div><div class=card><h2>📊 资源使用</h2>🔥 CPU <span data-cputxt='{{s.id}}'>{{'%.0f'|format(m.cpu_percent or 0)}}%</span> / {{'%.0f'|format(s.cpu_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.cpu_percent or 0,50,s.cpu_alert or 90)}}" data-cpu="{{s.id}}" data-limit="{{s.cpu_alert or 90}}" style="width:{{m.cpu_percent or 0}}%"></div></div><br>🧠 内存 <span data-memused='{{s.id}}'>{{fmt_size(m.mem_used or 0) if m.mem_used else '未知'}}</span> / <span data-memtotal='{{s.id}}'>{{fmt_size(m.mem_total or 0) if m.mem_total else '未知'}}</span> (<span data-memtxt='{{s.id}}'>{{'%.0f'|format(m.mem_percent or 0)}}%</span>) / {{'%.0f'|format(s.mem_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.mem_percent or 0,50,s.mem_alert or 90)}}" data-mem="{{s.id}}" data-limit="{{s.mem_alert or 90}}" style="width:{{m.mem_percent or 0}}%"></div></div><br>🔄 SWAP <span data-swapused='{{s.id}}'>{{fmt_size(m.swap_used or 0) if m.swap_used else '0B'}}</span> / <span data-swaptotal='{{s.id}}'>{{fmt_size(m.swap_total or 0) if m.swap_total else '无'}}</span> (<span data-swaptxt='{{s.id}}'>{{'%.0f'|format(m.swap_percent or 0)}}%</span>)<div class=progress><div class="bar {{bar_class(m.swap_percent or 0,50,80)}}" data-swap="{{s.id}}" data-limit="80" style="width:{{m.swap_percent or 0}}%"></div></div><br>💾 硬盘 <span data-diskused='{{s.id}}'>{{fmt_size(m.disk_used or 0) if m.disk_used else '未知'}}</span> / <span data-disktotal='{{s.id}}'>{{fmt_size(m.disk_total or 0) if m.disk_total else '未知'}}</span> (<span data-disktxt='{{s.id}}'>{{'%.0f'|format(m.disk_percent or 0)}}%</span>) / {{'%.0f'|format(s.disk_alert or 90)}}%<div class=progress><div class="bar {{bar_class(m.disk_percent or 0,50,s.disk_alert or 90)}}" data-disk="{{s.id}}" data-limit="{{s.disk_alert or 90}}" style="width:{{m.disk_percent or 0}}%"></div></div><hr>🌐 流量：⬇️ {{fmt_size(m.rx_bytes or 0)}} / ⬆️ {{fmt_size(m.tx_bytes or 0)}}<br>📡 探针：{{'🟢 在线' if fresh(m) else '🟠 超时/未上报'}}｜<span data-updated='{{s.id}}'>{{m.updated_at or '未知'}}</span></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📡 一键部署探针</h2><p class=small>复制到这台服务器 SSH 执行，探针静默上报，离线/恢复由主机器人统一推送。</p><pre id="agentcmd">{{s.agent_cmd}}</pre><button class=primary type=button onclick="copyText('agentcmd')">📋 复制探针命令</button><span id="agentcmdok" class=copyok></span></div><div class=card><h2>🛠️ 操作</h2><div class=btns><form method=post action="/servers/{{s.id}}/check"><button class=primary>📡 立即检测</button></form><form method=post action="/servers/{{s.id}}/refresh"><button>🌍 刷新地区</button></form><a class=btn href="/servers/{{s.id}}/edit">✏️ 编辑资料/阈值</a><form method=post action="/servers/{{s.id}}/delete" onsubmit="return delok()"><button class=danger>🗑️ 删除</button></form></div><hr><h3>🎯 告警状态</h3>{% for key,label in [('cpu','🔥 CPU'),('mem','🧠 内存'),('disk','💾 硬盘')] %}{% set st=s.states.get(key) %}<p>{{label}}：{{'🚨 告警中' if st and st.active else '✅ 正常'}}{% if st %}｜上次 {{st.last_value|round(0)}}%｜{{st.last_sent_at}}{% endif %}</p>{% endfor %}</div></div>'''
 FORM='''<div class=top><h1>{{'➕' if is_add else '✏️'}} {{action}}</h1><a class=btn href="/servers">📋 返回</a></div><form method=post class=card><div class=formgrid><div><label>🏷️ 名称</label><input name=name value="{{s.name or ''}}" required></div><div><label>🌐 IP/主机</label><input name=host value="{{s.host or ''}}" required placeholder="1.2.3.4 或 example.com"></div><div><label>🔌 端口</label><input name=check_port type=number min=1 max=65535 value="{{s.check_port or 22}}"></div><div><label>🧬 系统</label><input name=os_name value="{{s.os_name or ''}}" placeholder="Ubuntu 22.04"></div><div><label>🔁 周期</label><select name=cycle><option value=monthly {{'selected' if s.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if s.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if s.cycle=='yearly' else ''}}>年付</option></select></div><div><label>📆 到期</label><input name=expire_at value="{{s.expire_at or ''}}" placeholder="2027-05-01"></div><div><label>💰 价格</label><input name=price type=number step=.01 value="{{s.price if s.price is not none else 0}}"></div><div><label>💱 币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if (s.currency or 'USD')==c else ''}}>{{c}}</option>{% endfor %}</select></div><div><label>🔥 CPU 阈值 %</label><input name=cpu_alert type=number min=1 max=100 value="{{s.cpu_alert or 90}}"></div><div><label>🧠 内存阈值 %</label><input name=mem_alert type=number min=1 max=100 value="{{s.mem_alert or 90}}"></div><div><label>💾 硬盘阈值 %</label><input name=disk_alert type=number min=1 max=100 value="{{s.disk_alert or 90}}"></div><div><label>📝 备注</label><textarea name=note rows=4>{{s.note or ''}}</textarea></div></div><hr><label><input type=checkbox name=free_forever style="width:auto" {{'checked' if s.free_forever else ''}}> 🎁 永久免费</label><label><input type=checkbox name=auto_renew style="width:auto" {{'checked' if s.auto_renew else ''}}> 🔁 自动续费</label><div class=btns style="margin-top:18px"><button class=primary type=submit>💾 保存</button><a class=btn href="/servers">取消</a></div></form>'''
 LOCAL='''<div class=top><h1>🏠 本机面板</h1><a class=btn href="/">📊 总览</a></div><div class=grid3><div class="card kpi"><div>🌐 公网IP</div><div class=value style="font-size:22px">{{local.public_ip or '未知'}}</div></div><div class="card kpi"><div>⏱️ 运行</div><div class=value style="font-size:22px">{{local.uptime or '未知'}}</div></div><div class="card kpi"><div>🧩 CPU</div><div class=value>{{local.cpu_count or 0}} 核</div></div></div><div class=grid2 style="margin-top:16px"><div class=card><h2>📊 资源</h2>🔥 CPU {{'%.0f'|format(local.cpu or 0)}}%<div class=progress><div class=bar style="width:{{local.cpu or 0}}%"></div></div><br>🧠 内存 {{fmt(local.mem_used or 0)}} / {{fmt(local.mem_total or 0)}} ({{'%.0f'|format(local.mem_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.mem_percent or 0}}%"></div></div><br>💾 磁盘 {{fmt(local.disk_used or 0)}} / {{fmt(local.disk_total or 0)}} ({{'%.0f'|format(local.disk_percent or 0)}}%)<div class=progress><div class=bar style="width:{{local.disk_percent or 0}}%"></div></div></div><form class=card method=post><h2>✏️ 编辑本机资料</h2><label>名称</label><input name=name value="{{profile.name}}"><label>备注</label><input name=note value="{{profile.note}}"><label>周期</label><select name=cycle><option value=monthly {{'selected' if profile.cycle=='monthly' else ''}}>月付</option><option value=quarterly {{'selected' if profile.cycle=='quarterly' else ''}}>季付</option><option value=yearly {{'selected' if profile.cycle=='yearly' else ''}}>年付</option></select><label>价格</label><input name=price value="{{profile.price}}"><label>币种</label><select name=currency>{% for c in ['CNY','USD','EUR','GBP'] %}<option value={{c}} {{'selected' if profile.currency==c else ''}}>{{c}}</option>{% endfor %}</select><label>到期</label><input name=expire_at value="{{profile.expire_at}}"><button class=primary>💾 保存</button></form></div>'''
 EVENTS='''<div class=top><h1>🧾✨ 事件记录</h1><a class=btn href="/">📊 总览</a></div><div class=card><p class=small>📜 记录区域已开启滚轮浏览，鼠标放在表格内即可上下滑动查看更多历史事件。</p><div class=scrollbox><table class=table><thead><tr><th>时间</th><th>类型</th><th>标题</th><th>内容</th></tr></thead><tbody>{% for e in events %}<tr><td>{{e.created_at}}</td><td><span class=badge>{{e.event_type}}</span></td><td><b>{{e.title}}</b></td><td class="event-content">{{clean_event_html(e.content)|safe}}{% set ctx=event_context(e) %}{% if ctx %}<div class="event-context">{{ctx|safe}}</div>{% endif %}</td></tr>{% else %}<tr><td colspan=4>暂无事件</td></tr>{% endfor %}</tbody></table></div></div>'''
@@ -988,5 +1075,5 @@ def age(v):
         return '未知'
 # ===== END RUNTIME FIX =====
 
-app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row,site_name=site_name,favicon_exists=favicon_exists,clean_event_html=clean_event_html,event_context=event_context,display_price_label=display_price_label,display_expire_label=display_expire_label)
+app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row,site_name=site_name,favicon_exists=favicon_exists,clean_event_html=clean_event_html,event_context=event_context,display_price_label=display_price_label,display_expire_label=display_expire_label,metric_config_html=metric_config_html)
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
