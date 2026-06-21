@@ -153,18 +153,6 @@ def vhost(v):
     return v
 
 def passok(p): return check_password_hash(WEB_PASSWORD_HASH,p) if WEB_PASSWORD_HASH else (bool(WEB_PASSWORD) and p==WEB_PASSWORD)
-
-def local_or_login(fn):
-    @wraps(fn)
-    def w(*a, **kw):
-        ip = request.remote_addr or ''
-        if ip in ('127.0.0.1', '::1', 'localhost'):
-            return fn(*a, **kw)
-        if not session.get('ok'):
-            return redirect(url_for('login', next=request.path))
-        return fn(*a, **kw)
-    return w
-
 def login_required(fn):
     @wraps(fn)
     def w(*a,**kw):
@@ -445,16 +433,8 @@ def settings_page():
             flash('操作失败：'+str(e),'error')
         return redirect(url_for('settings_page'))
     return render('settings',SETTINGS,web_user=WEB_USERNAME,bot_token=BOT_TOKEN,admin_ids=','.join(ADMIN_IDS) if 'ADMIN_IDS' in globals() and isinstance(ADMIN_IDS,list) else os.getenv('ADMIN_IDS',''),has_bg=bool(theme_bg_exists()),theme_css=active_theme_css())
-
-@app.route('/api/ping')
-@local_or_login
-def api_ping():
-    resp=jsonify({'ok':True,'time':now(),'service':'server-monitor-web'})
-    resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
-    return resp
-
 @app.route('/api/servers-live')
-@local_or_login
+@login_required
 def api_servers_live():
     ss=all_servers()
     resp=jsonify({'time':now(),'servers':[metric_json(x) for x in ss]})
@@ -464,7 +444,7 @@ def api_servers_live():
     return resp
 
 @app.route('/api/metrics-debug')
-@local_or_login
+@login_required
 def api_metrics_debug():
     c=db()
     try:
@@ -903,6 +883,183 @@ html.light .metric-extra .mini b{color:#334155}
 .server-title .dot.online{animation:dotPulse 1.45s ease-in-out infinite}
 @keyframes dotPulse{0%,100%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 0 rgba(52,211,153,.55)}50%{box-shadow:0 0 0 2px rgba(0,0,0,.25),0 0 0 8px rgba(52,211,153,0)}}
 @media(max-width:760px){.metric-extra{grid-template-columns:1fr}}
+
+
+/* ===== glass transparency restore patch: only visual, no logic changes ===== */
+
+/* 夜间透明：恢复玻璃感，不能太实 */
+html:not(.light) body:not(.solid) .card,
+html:not(.light) body:not(.solid) .servercard,
+html:not(.light) body:not(.solid) .metric-extra .mini,
+html:not(.light) body:not(.solid) .badge,
+html:not(.light) body:not(.solid) input,
+html:not(.light) body:not(.solid) select,
+html:not(.light) body:not(.solid) textarea,
+html:not(.light) body:not(.solid) pre {
+  background: rgba(18, 32, 48, .38) !important;
+  border-color: rgba(255,255,255,.22) !important;
+  backdrop-filter: blur(20px) saturate(145%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(145%) !important;
+}
+
+/* 夜间实色：仍保持较深，但不影响透明模式 */
+html:not(.light) body.solid .card,
+html:not(.light) body.solid .servercard,
+html:not(.light) body.solid .metric-extra .mini,
+html:not(.light) body.solid .badge {
+  background: rgba(23, 36, 54, .88) !important;
+  border-color: rgba(255,255,255,.16) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* 日间透明：更通透，但文字保持深色 */
+html.light body:not(.solid) .card,
+html.light body:not(.solid) .servercard,
+html.light body:not(.solid) .metric-extra .mini,
+html.light body:not(.solid) .badge,
+html.light body:not(.solid) input,
+html.light body:not(.solid) select,
+html.light body:not(.solid) textarea,
+html.light body:not(.solid) pre {
+  background: rgba(255,255,255,.46) !important;
+  border-color: rgba(15,23,42,.16) !important;
+  backdrop-filter: blur(18px) saturate(145%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(145%) !important;
+}
+
+/* 日间实色 */
+html.light body.solid .card,
+html.light body.solid .servercard,
+html.light body.solid .metric-extra .mini,
+html.light body.solid .badge {
+  background: rgba(255,255,255,.90) !important;
+  border-color: rgba(15,23,42,.14) !important;
+}
+
+/* 夜间字体增强：透明背景下仍然清楚 */
+html:not(.light) body,
+html:not(.light) .card,
+html:not(.light) .servercard,
+html:not(.light) .table td,
+html:not(.light) .table th,
+html:not(.light) .small,
+html:not(.light) .muted,
+html:not(.light) .metric-extra .mini,
+html:not(.light) .metric-extra .mini b,
+html:not(.light) label,
+html:not(.light) p,
+html:not(.light) h1,
+html:not(.light) h2,
+html:not(.light) h3 {
+  color: #f7fbff !important;
+  text-shadow: 0 1px 3px rgba(0,0,0,.72) !important;
+}
+
+html:not(.light) .muted,
+html:not(.light) .small,
+html:not(.light) .metric-extra .mini b {
+  color: rgba(238,246,255,.86) !important;
+}
+
+/* 日间字体：使用深色，不吃背景 */
+html.light body,
+html.light .card,
+html.light .servercard,
+html.light .table td,
+html.light .table th,
+html.light .small,
+html.light .muted,
+html.light .metric-extra .mini,
+html.light .metric-extra .mini b,
+html.light label,
+html.light p,
+html.light h1,
+html.light h2,
+html.light h3 {
+  color: #0f172a !important;
+  text-shadow: none !important;
+}
+
+html.light .muted,
+html.light .small,
+html.light .metric-extra .mini b {
+  color: rgba(15,23,42,.72) !important;
+}
+
+/* 价格/到期/永久免费 badge：夜间自动高对比 */
+html:not(.light) .badge,
+html:not(.light) .price,
+html:not(.light) [class*="price"],
+html:not(.light) [class*="expire"] {
+  color: #f8fbff !important;
+  text-shadow: 0 1px 3px rgba(0,0,0,.75) !important;
+}
+
+/* 日间价格/到期/永久免费 badge：深色清晰 */
+html.light .badge,
+html.light .price,
+html.light [class*="price"],
+html.light [class*="expire"] {
+  color: #0f172a !important;
+  text-shadow: none !important;
+}
+
+/* 强调色保留：免费、金额、剩余天数在两种模式都看得清楚 */
+html:not(.light) .badge b,
+html:not(.light) .badge strong {
+  color: #ffffff !important;
+}
+html.light .badge b,
+html.light .badge strong {
+  color: #0f172a !important;
+}
+
+/* 绿色/黄色/红色告警文字在玻璃上清楚 */
+html:not(.light) .good,
+html:not(.light) .ok {
+  color: #55f0a8 !important;
+}
+html:not(.light) .warn {
+  color: #ffd166 !important;
+}
+html:not(.light) .bad,
+html:not(.light) .danger {
+  color: #ff8a8a !important;
+}
+html.light .good,
+html.light .ok {
+  color: #047857 !important;
+}
+html.light .warn {
+  color: #b7791f !important;
+}
+html.light .bad,
+html.light .danger {
+  color: #b91c1c !important;
+}
+
+/* 进度条底色在透明模式下不要太淡 */
+html:not(.light) .progress {
+  background: rgba(255,255,255,.16) !important;
+}
+html.light .progress {
+  background: rgba(15,23,42,.13) !important;
+}
+
+/* 服务器卡片不要被之前的深色补丁压成实色 */
+html:not(.light) body:not(.solid) .servercard.card,
+html:not(.light) body:not(.solid) .card.servercard {
+  background: linear-gradient(180deg, rgba(30,45,65,.42), rgba(18,30,45,.34)) !important;
+}
+
+/* 日间透明服务器卡片 */
+html.light body:not(.solid) .servercard.card,
+html.light body:not(.solid) .card.servercard {
+  background: linear-gradient(180deg, rgba(255,255,255,.52), rgba(255,255,255,.36)) !important;
+}
+
+/* ===== end glass transparency restore patch ===== */
 
 @media(max-width:1100px){.layout{grid-template-columns:1fr}.side{height:auto;position:relative}.nav{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.nav a{margin:0}.grid{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.formgrid{grid-template-columns:1fr}}@media(max-width:640px){.main{padding:16px}.grid{grid-template-columns:1fr}.top{display:block}.cardgrid{grid-template-columns:1fr}}
 </style><script>
