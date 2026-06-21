@@ -4907,6 +4907,9 @@ def ensure_metrics_hardware_columns():
         ("disk_total", "INTEGER DEFAULT 0"),
         ("disk_used", "INTEGER DEFAULT 0"),
         ("mem_used", "INTEGER DEFAULT 0"),
+        ("swap_total", "INTEGER DEFAULT 0"),
+        ("swap_used", "INTEGER DEFAULT 0"),
+        ("swap_percent", "REAL DEFAULT 0"),
     ]:
         ensure_column(conn, "server_metrics", col, definition)
     conn.commit()
@@ -4950,8 +4953,9 @@ def save_agent_metrics(payload):
         cpu_percent,mem_percent,disk_percent,
         rx_bytes,tx_bytes,
         cpu_cores,mem_total,disk_total,disk_used,mem_used,
+        swap_total,swap_used,swap_percent,
         updated_at,raw
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         int(sid),
         name,
@@ -4969,6 +4973,9 @@ def save_agent_metrics(payload):
         to_int(payload.get("disk_total")),
         to_int(payload.get("disk_used")),
         to_int(payload.get("mem_used")),
+        to_int(payload.get("swap_total")),
+        to_int(payload.get("swap_used")),
+        to_float(payload.get("swap_percent")),
         updated_at,
         json.dumps(payload, ensure_ascii=False)
     ))
@@ -4994,7 +5001,9 @@ def hardware_config_line(m):
     parts = []
     parts.append(f"🧩 {cpu} Cores" if cpu else "🧩 CPU 未知")
     parts.append(f"🧠 {fmt_size(mem)}" if mem else "🧠 内存未知")
+    swap = int(m["swap_total"] or 0) if "swap_total" in m.keys() else 0
     parts.append(f"💾 {fmt_size(disk)}" if disk else "💾 硬盘未知")
+    parts.append(f"🔄 SWAP {fmt_size(swap)}" if swap else "🔄 SWAP 无")
     return "⚙️ 服务器配置：" + " ｜ ".join(parts)
 
 
@@ -5004,7 +5013,8 @@ def hardware_config_short(m):
     cpu = int(m["cpu_cores"] or 0) if "cpu_cores" in m.keys() else 0
     mem = int(m["mem_total"] or 0) if "mem_total" in m.keys() else 0
     disk = int(m["disk_total"] or 0) if "disk_total" in m.keys() else 0
-    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt_size(mem) if mem else '?'} ｜ 💾 {fmt_size(disk) if disk else '?'}"
+    swap = int(m["swap_total"] or 0) if "swap_total" in m.keys() else 0
+    return f"🧩 {cpu or '?'}C ｜ 🧠 {fmt_size(mem) if mem else '?'} ｜ 🔄 {fmt_size(swap) if swap else '无'} ｜ 💾 {fmt_size(disk) if disk else '?'}"
 
 
 def agent_install_command(server_name="server", sid=None):
@@ -5076,6 +5086,7 @@ def remote_detail_text(r):
             f"\n{hardware_config_line(m)}"
             f"\n📊 探针 CPU：{m['cpu_percent']:.0f}%"
             f"\n🧠 探针内存：{fmt_size(m['mem_used']) if 'mem_used' in m.keys() and m['mem_used'] else '未知'} / {fmt_size(m['mem_total']) if 'mem_total' in m.keys() and m['mem_total'] else '未知'} ({m['mem_percent']:.0f}%)"
+            f"\n🔄 探针 SWAP：{fmt_size(m['swap_used']) if 'swap_used' in m.keys() and m['swap_used'] else '0B'} / {fmt_size(m['swap_total']) if 'swap_total' in m.keys() and m['swap_total'] else '无'} ({float(m['swap_percent']) if 'swap_percent' in m.keys() and m['swap_percent'] else 0:.0f}%)"
             f"\n💾 探针硬盘：{fmt_size(m['disk_used']) if 'disk_used' in m.keys() and m['disk_used'] else '未知'} / {fmt_size(m['disk_total']) if 'disk_total' in m.keys() and m['disk_total'] else '未知'} ({m['disk_percent']:.0f}%)"
             f"\n🌐 探针流量：⬇️{fmt_size(m['rx_bytes'])} / ⬆️{fmt_size(m['tx_bytes'])}"
         )
