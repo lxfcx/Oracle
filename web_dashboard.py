@@ -153,6 +153,18 @@ def vhost(v):
     return v
 
 def passok(p): return check_password_hash(WEB_PASSWORD_HASH,p) if WEB_PASSWORD_HASH else (bool(WEB_PASSWORD) and p==WEB_PASSWORD)
+
+def local_or_login(fn):
+    @wraps(fn)
+    def w(*a, **kw):
+        ip = request.remote_addr or ''
+        if ip in ('127.0.0.1', '::1', 'localhost'):
+            return fn(*a, **kw)
+        if not session.get('ok'):
+            return redirect(url_for('login', next=request.path))
+        return fn(*a, **kw)
+    return w
+
 def login_required(fn):
     @wraps(fn)
     def w(*a,**kw):
@@ -433,8 +445,16 @@ def settings_page():
             flash('操作失败：'+str(e),'error')
         return redirect(url_for('settings_page'))
     return render('settings',SETTINGS,web_user=WEB_USERNAME,bot_token=BOT_TOKEN,admin_ids=','.join(ADMIN_IDS) if 'ADMIN_IDS' in globals() and isinstance(ADMIN_IDS,list) else os.getenv('ADMIN_IDS',''),has_bg=bool(theme_bg_exists()),theme_css=active_theme_css())
+
+@app.route('/api/ping')
+@local_or_login
+def api_ping():
+    resp=jsonify({'ok':True,'time':now(),'service':'server-monitor-web'})
+    resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+    return resp
+
 @app.route('/api/servers-live')
-@login_required
+@local_or_login
 def api_servers_live():
     ss=all_servers()
     resp=jsonify({'time':now(),'servers':[metric_json(x) for x in ss]})
@@ -444,7 +464,7 @@ def api_servers_live():
     return resp
 
 @app.route('/api/metrics-debug')
-@login_required
+@local_or_login
 def api_metrics_debug():
     c=db()
     try:
