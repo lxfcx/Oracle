@@ -2720,7 +2720,7 @@ def cmd_agent_command(chat_id, sid=None):
         f"{title}\n\n"
         "━━━━━━━━━━━━━━\n"
         "📌 <b>用途：</b>复制下面命令到对应服务器 SSH 执行。\n"
-        "📌 <b>效果：</b>目标服务器会安装轻量探针，直接向 TG 推送上线、磁盘/内存/CPU 告警。\n"
+        "📌 <b>效果：</b>目标服务器会安装轻量探针，直接向 TG 推送上线、磁盘/内存/CPU 警告。\n"
         "📌 <b>说明：</b>主机器人当前的在线/离线检测仍使用端口检测；真正类似探针的实时状态需要在每台服务器安装这个 Agent。\n"
         "━━━━━━━━━━━━━━\n\n"
         f"<code>{h(cmd)}</code>"
@@ -5804,11 +5804,11 @@ def handle_callback(callback):
 
 
 # ============================================================
-# FINAL EXTREME PATCH: 秒回 + 精准 300 秒离线/恢复 + CPU/内存/硬盘阈值告警
+# FINAL EXTREME PATCH: 秒回 + 精准 300 秒离线/恢复 + CPU/内存/硬盘阈值警告
 # 说明：
 # - 原来 CHECK_INTERVAL=60 且 poll 先跑监控再 getUpdates，会导致命令回复卡顿、离线恢复延迟超过 300 秒。
 # - 这里改为：先处理 TG 消息；后台监控每 10 秒检查；离线宽限按 first_fail_at 精准计算。
-# - 每台服务器支持单独编辑 CPU/内存/硬盘告警百分比；探针上报后自动触发状态事件和 TG 推送。
+# - 每台服务器支持单独编辑 CPU/内存/硬盘警告百分比；探针上报后自动触发状态事件和 TG 推送。
 # ============================================================
 
 FAST_ONLINE_CHECK_INTERVAL = int(os.getenv("ONLINE_CHECK_INTERVAL", "10"))
@@ -5817,6 +5817,12 @@ FAST_EXPIRY_CHECK_INTERVAL = int(os.getenv("EXPIRY_CHECK_INTERVAL", "300"))
 OFFLINE_GRACE_SECONDS = int(os.getenv("OFFLINE_GRACE_SECONDS", str(globals().get("OFFLINE_GRACE_SECONDS", 300))))
 RECOVERY_STABLE_SECONDS = int(os.getenv("RECOVERY_STABLE_SECONDS", "20"))
 METRIC_ALERT_COOLDOWN_SECONDS = int(os.getenv("METRIC_ALERT_COOLDOWN_SECONDS", "600"))
+# 指标警告防抖：连续多次超过才触发，连续多次恢复才推送恢复。
+# 只影响 CPU/内存/硬盘警告，避免 Telegram 重复刷屏。
+METRIC_ALERT_TRIGGER_COUNT = int(os.getenv("METRIC_ALERT_TRIGGER_COUNT", "2"))
+METRIC_ALERT_RECOVER_COUNT = int(os.getenv("METRIC_ALERT_RECOVER_COUNT", "3"))
+METRIC_ALERT_RECOVER_GAP = float(os.getenv("METRIC_ALERT_RECOVER_GAP", "5"))
+
 
 
 def ensure_alert_threshold_columns():
@@ -5848,9 +5854,19 @@ def ensure_alert_threshold_columns():
         last_value REAL DEFAULT 0,
         threshold REAL DEFAULT 0,
         last_sent_at TEXT DEFAULT '',
+        high_count INTEGER DEFAULT 0,
+        low_count INTEGER DEFAULT 0,
+        last_changed_at TEXT DEFAULT '',
         PRIMARY KEY(server_id, metric)
     )
     """)
+    # 工业级防抖需要计数列；老库自动补列，不影响旧数据。
+    for col, definition in [
+        ("high_count", "INTEGER DEFAULT 0"),
+        ("low_count", "INTEGER DEFAULT 0"),
+        ("last_changed_at", "TEXT DEFAULT ''"),
+    ]:
+        ensure_column(conn, "metric_alert_state", col, definition)
     conn.commit()
     conn.close()
 
@@ -5900,7 +5916,7 @@ def metric_value_from_row(m, metric):
 def metric_alert_text(r, metric, value, threshold, recovered=False):
     em = metric_emoji(metric)
     name = metric_cn(metric)
-    title = f"✅{em} <b>{name} 告警恢复</b> {em}✅" if recovered else f"🚨{em} <b>{name} 使用率告警</b> {em}🚨"
+    title = f"✅{em} <b>{name} 警告恢复</b> {em}✅" if recovered else f"🚨{em} <b>{name} 使用率警告</b> {em}🚨"
     status = "✅ 已恢复正常" if recovered else "🚨 已超过阈值"
     m = get_agent_metrics(r["id"]) if "get_agent_metrics" in globals() else None
 
@@ -5921,7 +5937,7 @@ def metric_alert_text(r, metric, value, threshold, recovered=False):
         f"📍 <b>地区：</b>{server_location_line(r)}\n"
         f"{em} <b>项目：</b>{name}\n"
         f"📊 <b>当前使用率：</b>{value:.0f}%\n"
-        f"🎯 <b>告警阈值：</b>{threshold:.0f}%\n"
+        f"🎯 <b>警告阈值：</b>{threshold:.0f}%\n"
         f"📌 <b>状态：</b>{status}"
         f"{extra}\n"
         f"⏰ <b>时间：</b>{now_text()}\n"
@@ -5936,23 +5952,32 @@ def metric_alert_state_get(conn, sid, metric):
     ).fetchone()
 
 
-def metric_alert_state_set(conn, sid, metric, active, value, threshold):
+def metric_alert_state_set(conn, sid, metric, active, value, threshold, high_count=0, low_count=0):
     conn.execute(
-        "INSERT OR REPLACE INTO metric_alert_state(server_id, metric, active, last_value, threshold, last_sent_at) VALUES(?,?,?,?,?,?)",
-        (sid, metric, 1 if active else 0, float(value), float(threshold), now_text())
+        """INSERT OR REPLACE INTO metric_alert_state(
+            server_id, metric, active, last_value, threshold, last_sent_at,
+            high_count, low_count, last_changed_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)""",
+        (
+            sid, metric, 1 if active else 0, float(value), float(threshold), now_text(),
+            int(high_count or 0), int(low_count or 0), now_text()
+        )
     )
 
 
-def can_resend_metric_alert(state):
-    if not state:
-        return True
-    try:
-        last = state["last_sent_at"] or ""
-        if not last:
-            return True
-        return (datetime.now() - parse_date(last)).total_seconds() >= METRIC_ALERT_COOLDOWN_SECONDS
-    except Exception:
-        return True
+def metric_alert_state_touch(conn, sid, metric, active, value, threshold, high_count=0, low_count=0):
+    # 只更新状态和计数，不更新时间 last_sent_at，不发送 Telegram。
+    conn.execute(
+        """INSERT OR REPLACE INTO metric_alert_state(
+            server_id, metric, active, last_value, threshold, last_sent_at,
+            high_count, low_count, last_changed_at
+        ) VALUES(?,?,?,?,?,?,?,?,?)""",
+        (
+            sid, metric, 1 if active else 0, float(value), float(threshold),
+            "",
+            int(high_count or 0), int(low_count or 0), now_text()
+        )
+    )
 
 
 def monitor_metric_alerts():
@@ -5961,42 +5986,64 @@ def monitor_metric_alerts():
         return
 
     conn = db()
-    rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
-    for r in rows:
-        m = get_agent_metrics(r["id"])
-        if not m:
-            continue
-
-        for metric, col in [("cpu", "cpu_alert"), ("mem", "mem_alert"), ("disk", "disk_alert")]:
-            threshold = threshold_value(r, col, 90)
-            if threshold <= 0:
+    try:
+        rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+        for r in rows:
+            m = get_agent_metrics(r["id"])
+            if not m:
                 continue
 
-            value = metric_value_from_row(m, metric)
-            state = metric_alert_state_get(conn, r["id"], metric)
-            active = bool(state and int(state["active"] or 0) == 1)
+            for metric, col in [("cpu", "cpu_alert"), ("mem", "mem_alert"), ("disk", "disk_alert")]:
+                threshold = threshold_value(r, col, 90)
+                if threshold <= 0:
+                    continue
 
-            # 触发告警：超过阈值，且之前未激活或冷却时间已过。
-            if value >= threshold:
-                if (not active) or can_resend_metric_alert(state):
-                    metric_alert_state_set(conn, r["id"], metric, True, value, threshold)
-                    conn.commit()
-                    title = f"{metric_emoji(metric)} {r['name']} {metric_cn(metric)} 超过 {threshold:.0f}%"
-                    content = metric_alert_text(r, metric, value, threshold, recovered=False)
-                    event_add("system", title, f"{metric_cn(metric)} 当前 {value:.0f}% / 阈值 {threshold:.0f}%")
-                    broadcast(content)
-                continue
+                value = metric_value_from_row(m, metric)
+                state = metric_alert_state_get(conn, r["id"], metric)
+                active = bool(state and int(state["active"] or 0) == 1)
+                high_count = int(state["high_count"] or 0) if state and "high_count" in state.keys() else 0
+                low_count = int(state["low_count"] or 0) if state and "low_count" in state.keys() else 0
+                recover_threshold = max(0, threshold - METRIC_ALERT_RECOVER_GAP)
 
-            # 恢复通知：之前处于告警状态，现在低于阈值 - 3，避免抖动。
-            if active and value <= max(0, threshold - 3):
-                metric_alert_state_set(conn, r["id"], metric, False, value, threshold)
+                # 触发警告：必须连续多次超过阈值；已处于警告状态时绝不重复推送。
+                if value >= threshold:
+                    high_count += 1
+                    low_count = 0
+
+                    if not active and high_count >= METRIC_ALERT_TRIGGER_COUNT:
+                        metric_alert_state_set(conn, r["id"], metric, True, value, threshold, 0, 0)
+                        conn.commit()
+                        title = f"{metric_emoji(metric)} {r['name']} {metric_cn(metric)} 超过 {threshold:.0f}%"
+                        content = metric_alert_text(r, metric, value, threshold, recovered=False)
+                        event_add("system", title, f"{metric_cn(metric)} 当前 {value:.0f}% / 阈值 {threshold:.0f}%")
+                        broadcast(content)
+                    else:
+                        metric_alert_state_touch(conn, r["id"], metric, active, value, threshold, high_count, low_count)
+                        conn.commit()
+                    continue
+
+                # 恢复通知：必须已经处于警告状态，并且连续多次低于恢复线，才发送一次恢复。
+                if active and value <= recover_threshold:
+                    low_count += 1
+                    high_count = 0
+
+                    if low_count >= METRIC_ALERT_RECOVER_COUNT:
+                        metric_alert_state_set(conn, r["id"], metric, False, value, threshold, 0, 0)
+                        conn.commit()
+                        title = f"✅ {r['name']} {metric_cn(metric)} 警告恢复"
+                        content = metric_alert_text(r, metric, value, threshold, recovered=True)
+                        event_add("system", title, f"{metric_cn(metric)} 当前 {value:.0f}% / 阈值 {threshold:.0f}%")
+                        broadcast(content)
+                    else:
+                        metric_alert_state_touch(conn, r["id"], metric, True, value, threshold, high_count, low_count)
+                        conn.commit()
+                    continue
+
+                # 中间区间：不触发、不恢复，只更新最后值，防止阈值附近抖动刷屏。
+                metric_alert_state_touch(conn, r["id"], metric, active, value, threshold, 0, 0)
                 conn.commit()
-                title = f"✅ {r['name']} {metric_cn(metric)} 告警恢复"
-                content = metric_alert_text(r, metric, value, threshold, recovered=True)
-                event_add("system", title, f"{metric_cn(metric)} 当前 {value:.0f}% / 阈值 {threshold:.0f}%")
-                broadcast(content)
-
-    conn.close()
+    finally:
+        conn.close()
 
 
 def offline_elapsed_text(seconds):
@@ -6108,14 +6155,14 @@ def monitor_server_online_status():
     conn.close()
 
 
-# 覆盖字段显示：加入 CPU/内存/硬盘告警阈值。
+# 覆盖字段显示：加入 CPU/内存/硬盘警告阈值。
 def field_cn(field):
     return {
         "host": "IP / 主机",
         "ip": "IP / 主机",
-        "cpu_alert": "CPU 告警阈值",
-        "mem_alert": "内存告警阈值",
-        "disk_alert": "硬盘告警阈值",
+        "cpu_alert": "CPU 警告阈值",
+        "mem_alert": "内存警告阈值",
+        "disk_alert": "硬盘警告阈值",
         "price": "付费价格",
         "expire_at": "到期时间",
         "cycle": "付费周期",
@@ -6162,26 +6209,26 @@ def update_server_field(sid, field, value):
             conn.close()
             raise ValueError("没有找到这个服务器 ID")
         conn.execute(f"UPDATE servers SET {field}=? WHERE id=?", (v, sid))
-        # 改阈值后清理该项旧告警状态，避免改完立刻卡在旧状态。
+        # 改阈值后清理该项旧警告状态，避免改完立刻卡在旧状态。
         metric = {"cpu_alert": "cpu", "mem_alert": "mem", "disk_alert": "disk"}[field]
         conn.execute("DELETE FROM metric_alert_state WHERE server_id=? AND metric=?", (sid, metric))
         conn.commit()
         new_row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
         conn.close()
-        event_add("action", "编辑服务器告警阈值", f"服务器 ID {sid} 已更新 {field_cn(field)} 为 {v:g}%")
+        event_add("action", "编辑服务器警告阈值", f"服务器 ID {sid} 已更新 {field_cn(field)} 为 {v:g}%")
         return new_row
     return _prev_update_server_field_threshold_patch(sid, field, value)
 
 
 def alert_threshold_line(r):
     return (
-        f"🎯 告警阈值：🔥CPU {threshold_value(r, 'cpu_alert'):.0f}% ｜ "
+        f"🎯 警告阈值：🔥CPU {threshold_value(r, 'cpu_alert'):.0f}% ｜ "
         f"🧠内存 {threshold_value(r, 'mem_alert'):.0f}% ｜ "
         f"💾硬盘 {threshold_value(r, 'disk_alert'):.0f}%"
     )
 
 
-# 覆盖详情：在原详情基础上补告警阈值，避免重写全部详情逻辑。
+# 覆盖详情：在原详情基础上补警告阈值，避免重写全部详情逻辑。
 _prev_remote_detail_text_threshold_patch = remote_detail_text
 
 def remote_detail_text(r):
