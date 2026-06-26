@@ -6737,6 +6737,298 @@ def save_agent_metrics(payload):
 
     return result
 
+
+# ============================================================
+# RECOVERY ONLINE PUSH FIX V2 (final minimal override)
+# 只修复“恢复在线不推送/不写事件”的链路：
+# 1) 后台端口检测 old offline -> raw online 立即写 online 并推送一次。
+# 2) 手动“检测服务器”看到在线时，也会先补触发一次恢复在线，避免只显示在线但没有事件。
+# 3) 探针 HTTP 上报成功时同样补触发一次恢复在线。
+# 4) 文件末尾最终 poll 覆盖了早前的 metrics receiver 启动包装，这里重新包装启动接收器。
+# 其它离线宽限、续费、菜单、阈值警告逻辑不改。
+# ============================================================
+
+def _ensure_recovery_status_columns_v2():
+    try:
+        if "ensure_alert_threshold_columns" in globals():
+            ensure_alert_threshold_columns()
+            return
+    except Exception:
+        pass
+    conn = db()
+    try:
+        for col, definition in [
+            ("fail_count", "INTEGER DEFAULT 0"),
+            ("success_count", "INTEGER DEFAULT 0"),
+            ("notified_offline", "INTEGER DEFAULT 0"),
+            ("first_fail_at", "TEXT DEFAULT ''"),
+            ("first_recover_at", "TEXT DEFAULT ''"),
+            ("online_since", "TEXT DEFAULT ''"),
+            ("offline_since", "TEXT DEFAULT ''"),
+        ]:
+            ensure_column(conn, "server_status", col, definition)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _row_get_v2(row, key, default=""):
+    try:
+        if row is not None and key in row.keys() and row[key] is not None:
+            return row[key]
+    except Exception:
+        pass
+    return default
+
+
+def _push_online_recovery_once_v2(server_id, server_row=None):
+    """把 server_status 从 offline 切回 online，并只推送一次恢复在线。"""
+    sid = str(server_id or "").strip()
+    if not sid.isdigit():
+        return False
+
+    _ensure_recovery_status_columns_v2()
+    now = now_text()
+    conn = db()
+    should_push = False
+    srv = server_row
+    try:
+        if srv is None:
+            srv = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+        if not srv:
+            return False
+
+        old = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+        if not old:
+            conn.execute(
+                """INSERT OR REPLACE INTO server_status(
+                    server_id,last_status,last_checked_at,last_changed_at,
+                    fail_count,success_count,notified_offline,
+                    first_fail_at,first_recover_at,online_since,offline_since
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (int(sid), "online", now, now, 0, 1, 0, "", "", now, "")
+            )
+            conn.commit()
+            return False
+
+        old_status = str(_row_get_v2(old, "last_status", "unknown") or "unknown").strip().lower()
+        online_since = str(_row_get_v2(old, "online_since", "") or "")
+        if not online_since:
+            online_since = str(_row_get_v2(old, "last_changed_at", "") or now) if old_status == "online" else now
+
+        if old_status == "offline":
+            conn.execute(
+                """UPDATE server_status
+                   SET last_status='online', last_checked_at=?, last_changed_at=?,
+                       fail_count=0, success_count=success_count+1, notified_offline=0,
+                       first_fail_at='', first_recover_at='', online_since=?, offline_since=''
+                   WHERE server_id=?""",
+                (now, now, now, sid)
+            )
+            should_push = True
+        else:
+            conn.execute(
+                """UPDATE server_status
+                   SET last_status='online', last_checked_at=?, fail_count=0,
+                       success_count=success_count+1, first_fail_at='', first_recover_at='',
+                       online_since=?, offline_since=''
+                   WHERE server_id=?""",
+                (now, online_since, sid)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    if should_push and srv:
+        try:
+            push_event("online", f"服务器恢复在线：{srv['name']}", online_push_text(srv))
+        except Exception as e:
+            try:
+                print(f"[BOT] recovery online push failed: {e}", flush=True)
+            except Exception:
+                pass
+        return True
+    return False
+
+
+# 覆盖最终在线监控：只改恢复在线分支，离线宽限和离线推送保持原逻辑。
+def monitor_server_online_status():
+    _ensure_recovery_status_columns_v2()
+    conn = db()
+    rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+    now_dt = datetime.now()
+    now = now_text()
+    online_recovered_rows = []
+
+    for r in rows:
+        sid = r["id"]
+        raw_online = check_tcp(r["host"], r["check_port"], timeout=3)
+        old = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+
+        if not old:
+            status = "online" if raw_online else "unknown"
+            conn.execute(
+                """INSERT OR REPLACE INTO server_status(
+                    server_id,last_status,last_checked_at,last_changed_at,
+                    fail_count,success_count,notified_offline,
+                    first_fail_at,first_recover_at,online_since,offline_since
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (sid, status, now, now, 0 if raw_online else 1, 1 if raw_online else 0, 0, "" if raw_online else now, "", now if raw_online else "", "")
+            )
+            conn.commit()
+            continue
+
+        old_status = str(_row_get_v2(old, "last_status", "unknown") or "unknown").strip().lower()
+        first_fail_at = str(_row_get_v2(old, "first_fail_at", "") or "")
+        online_since = str(_row_get_v2(old, "online_since", "") or "")
+        offline_since = str(_row_get_v2(old, "offline_since", "") or "")
+
+        def elapsed_from(v):
+            try:
+                return (now_dt - parse_date(v)).total_seconds() if v else 0
+            except Exception:
+                return 0
+
+        fail_elapsed = elapsed_from(first_fail_at)
+
+        if raw_online:
+            if old_status == "offline":
+                # 核心修复：检测到 offline -> online 时立即恢复并推送一次，避免只显示在线但无事件/无通知。
+                conn.execute(
+                    """UPDATE server_status
+                       SET last_status='online', last_checked_at=?, last_changed_at=?,
+                           fail_count=0, success_count=success_count+1, notified_offline=0,
+                           first_fail_at='', first_recover_at='', online_since=?, offline_since=''
+                       WHERE server_id=?""",
+                    (now, now, now, sid)
+                )
+                conn.commit()
+                online_recovered_rows.append(r)
+            else:
+                if not online_since:
+                    online_since = str(_row_get_v2(old, "last_changed_at", "") or now) if old_status == "online" else now
+                conn.execute(
+                    """UPDATE server_status
+                       SET last_status='online', last_checked_at=?, fail_count=0,
+                           success_count=success_count+1, first_fail_at='', first_recover_at='',
+                           online_since=?, offline_since=''
+                       WHERE server_id=?""",
+                    (now, online_since, sid)
+                )
+                conn.commit()
+            continue
+
+        # raw offline：保持原来的离线宽限逻辑，不改离线正常推送。
+        if old_status != "offline":
+            if not first_fail_at:
+                conn.execute(
+                    """UPDATE server_status
+                       SET first_fail_at=?, last_checked_at=?, fail_count=1,
+                           success_count=0, first_recover_at=''
+                       WHERE server_id=?""",
+                    (now, now, sid)
+                )
+                conn.commit()
+            elif fail_elapsed >= OFFLINE_GRACE_SECONDS:
+                conn.execute(
+                    """UPDATE server_status
+                       SET last_status='offline', last_checked_at=?, last_changed_at=?,
+                           fail_count=fail_count+1, success_count=0, notified_offline=1,
+                           first_recover_at='', offline_since=?, online_since=''
+                       WHERE server_id=?""",
+                    (now, now, now, sid)
+                )
+                conn.commit()
+                push_event("offline", f"服务器离线：{r['name']}", offline_push_text(r))
+            else:
+                conn.execute(
+                    "UPDATE server_status SET last_checked_at=?, fail_count=fail_count+1, success_count=0 WHERE server_id=?",
+                    (now, sid)
+                )
+                conn.commit()
+        else:
+            if not offline_since:
+                offline_since = str(_row_get_v2(old, "last_changed_at", "") or now)
+            conn.execute(
+                """UPDATE server_status
+                   SET last_checked_at=?, fail_count=fail_count+1, success_count=0,
+                       first_recover_at='', offline_since=?, online_since=''
+                   WHERE server_id=?""",
+                (now, offline_since, sid)
+            )
+            conn.commit()
+
+    conn.close()
+
+    for r in online_recovered_rows:
+        try:
+            push_event("online", f"服务器恢复在线：{r['name']}", online_push_text(r))
+        except Exception as e:
+            try:
+                print(f"[BOT] recovery online monitor push failed: {e}", flush=True)
+            except Exception:
+                pass
+
+
+# 手动检测前先补一次 offline -> online 恢复事件，避免页面显示在线但事件记录没有恢复通知。
+_prev_cmd_check_servers_recovery_v2 = cmd_check_servers
+
+def cmd_check_servers(chat_id):
+    try:
+        _ensure_recovery_status_columns_v2()
+        conn = db()
+        rows = conn.execute("SELECT * FROM servers ORDER BY id ASC").fetchall()
+        conn.close()
+        for r in rows:
+            try:
+                if check_tcp(r["host"], r["check_port"], timeout=3):
+                    _push_online_recovery_once_v2(r["id"], r)
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            print(f"[BOT] manual check online recovery precheck failed: {e}", flush=True)
+        except Exception:
+            pass
+    return _prev_cmd_check_servers_recovery_v2(chat_id)
+
+
+# 探针上报成功也触发 offline -> online 恢复事件。
+_prev_save_agent_metrics_recovery_v2 = save_agent_metrics
+
+def save_agent_metrics(payload):
+    result = _prev_save_agent_metrics_recovery_v2(payload)
+    ok = False
+    try:
+        ok = bool(result[0]) if isinstance(result, tuple) else bool(result)
+    except Exception:
+        ok = False
+    if ok:
+        sid = str(payload.get("server_id") or payload.get("sid") or "").strip()
+        try:
+            _push_online_recovery_once_v2(sid)
+        except Exception as e:
+            try:
+                print(f"[BOT] agent online recovery v2 failed: {e}", flush=True)
+            except Exception:
+                pass
+    return result
+
+
+# 最终版 poll 覆盖过早前的 start_metrics_receiver 包装；这里补回，保证新版探针 HTTP 上报接收器真的启动。
+_prev_poll_recovery_v2 = poll
+
+def poll():
+    try:
+        if "start_metrics_receiver" in globals():
+            start_metrics_receiver()
+    except Exception as e:
+        try:
+            print(f"[BOT] metrics receiver start failed: {e}", flush=True)
+        except Exception:
+            pass
+    return _prev_poll_recovery_v2()
+
 if __name__ == "__main__":
     init_db()
     poll()
