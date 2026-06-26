@@ -5834,8 +5834,10 @@ def handle_callback(callback):
 FAST_ONLINE_CHECK_INTERVAL = int(os.getenv("ONLINE_CHECK_INTERVAL", "10"))
 FAST_METRIC_CHECK_INTERVAL = int(os.getenv("METRIC_CHECK_INTERVAL", "20"))
 FAST_EXPIRY_CHECK_INTERVAL = int(os.getenv("EXPIRY_CHECK_INTERVAL", "300"))
-OFFLINE_GRACE_SECONDS = int(os.getenv("OFFLINE_GRACE_SECONDS", str(globals().get("OFFLINE_GRACE_SECONDS", 300))))
-RECOVERY_STABLE_SECONDS = int(os.getenv("RECOVERY_STABLE_SECONDS", "20"))
+# 在线/离线状态防抖：
+# 离线默认 30 秒确认；恢复在线默认 10 秒确认。
+OFFLINE_GRACE_SECONDS = int(os.getenv("OFFLINE_GRACE_SECONDS", "30"))
+RECOVERY_STABLE_SECONDS = int(os.getenv("RECOVERY_STABLE_SECONDS", "10"))
 METRIC_ALERT_COOLDOWN_SECONDS = int(os.getenv("METRIC_ALERT_COOLDOWN_SECONDS", "600"))
 # 指标警告防抖：连续多次超过才触发，连续多次恢复才推送恢复。
 # 只影响 CPU/内存/硬盘警告，避免 Telegram 重复刷屏。
@@ -6111,8 +6113,8 @@ def monitor_server_online_status():
         recover_elapsed = elapsed_from(first_recover_at)
 
         if raw_online:
-            if old_status == "offline" and notified == 1:
-                # 离线后恢复：先记录恢复开始，稳定 RECOVERY_STABLE_SECONDS 后只推一次。
+            if old_status == "offline":
+                # 离线后恢复：只要旧状态是 offline，就进入恢复推送流程，不再依赖 notified_offline，避免恢复在线被静默吞掉。
                 if not first_recover_at:
                     conn.execute(
                         "UPDATE server_status SET first_recover_at=?, last_checked_at=?, success_count=1 WHERE server_id=?",
