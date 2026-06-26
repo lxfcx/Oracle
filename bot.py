@@ -6559,7 +6559,7 @@ def save_agent_metrics(payload):
         cpu_percent,mem_percent,disk_percent,rx_bytes,tx_bytes,
         cpu_cores,mem_total,mem_used,swap_total,swap_used,swap_percent,disk_total,disk_used,
         updated_at,raw
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         int(sid),
         str(payload.get("name") or ""),
@@ -6616,6 +6616,126 @@ _old_init_db_realtime_swap_patch = init_db
 def init_db():
     _old_init_db_realtime_swap_patch()
     ensure_metrics_table()
+
+
+# ============================================================
+# RECOVERY ONLINE PUSH FIX (minimal override)
+# 只修复：探针恢复上报时，服务器从 offline -> online 没有推送/事件记录的问题。
+# 不改动原来的指标保存、菜单、续费、阈值警告、检测循环等核心功能。
+# 原因：前面版本的 save_agent_metrics() 曾处理恢复在线，但文件末尾最终版
+# save_agent_metrics() 又覆盖了它，只保存 server_metrics，不再更新 server_status。
+# ============================================================
+_prev_save_agent_metrics_recovery_push_fix = save_agent_metrics
+
+
+def mark_server_online_from_agent_report(server_id):
+    """探针上报代表该服务器已在线；仅在旧状态为 offline 时发送一次恢复在线通知。"""
+    sid = str(server_id or "").strip()
+    if not sid.isdigit():
+        return
+
+    try:
+        if "ensure_alert_threshold_columns" in globals():
+            ensure_alert_threshold_columns()
+    except Exception:
+        # 不影响指标上报主流程。
+        pass
+
+    conn = None
+    should_push = False
+    server_row = None
+    now = now_text()
+
+    try:
+        conn = db()
+        server_row = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+        if not server_row:
+            return
+
+        old = conn.execute("SELECT * FROM server_status WHERE server_id=?", (sid,)).fetchone()
+
+        # 首次收到探针：初始化为 online，不发送“恢复”通知，避免新增机器误报。
+        if not old:
+            conn.execute(
+                """INSERT OR REPLACE INTO server_status(
+                    server_id,last_status,last_checked_at,last_changed_at,
+                    fail_count,success_count,notified_offline,
+                    first_fail_at,first_recover_at,online_since,offline_since
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (int(sid), "online", now, now, 0, 1, 0, "", "", now, "")
+            )
+            conn.commit()
+            return
+
+        old_status = str(old["last_status"] or "unknown").strip().lower()
+
+        if old_status == "offline":
+            # 关键修复：只在数据库里仍然是 offline 时切到 online，避免并发/重复上报导致重复推送。
+            cur = conn.execute(
+                """UPDATE server_status
+                   SET last_status='online', last_checked_at=?, last_changed_at=?,
+                       fail_count=0, success_count=success_count+1, notified_offline=0,
+                       first_fail_at='', first_recover_at='', online_since=?, offline_since=''
+                   WHERE server_id=? AND last_status='offline'""",
+                (now, now, now, sid)
+            )
+            should_push = cur.rowcount > 0
+            conn.commit()
+        else:
+            # 非 offline -> online 不推送，只同步状态，保持原有防抖逻辑不刷屏。
+            online_since = ""
+            try:
+                online_since = old["online_since"] if "online_since" in old.keys() and old["online_since"] else ""
+            except Exception:
+                online_since = ""
+            if not online_since:
+                online_since = old["last_changed_at"] or now if old_status == "online" else now
+            conn.execute(
+                """UPDATE server_status
+                   SET last_status='online', last_checked_at=?, fail_count=0,
+                       success_count=success_count+1, first_fail_at='', first_recover_at='',
+                       online_since=?, offline_since=''
+                   WHERE server_id=?""",
+                (now, online_since, sid)
+            )
+            conn.commit()
+    except Exception as e:
+        try:
+            print(f"[BOT] agent online recovery status update error: {e}", flush=True)
+        except Exception:
+            pass
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+    if should_push and server_row:
+        try:
+            push_event("online", f"服务器恢复在线：{server_row['name']}", online_push_text(server_row))
+        except Exception as e:
+            try:
+                print(f"[BOT] agent online recovery push error: {e}", flush=True)
+            except Exception:
+                pass
+
+
+def save_agent_metrics(payload):
+    """保留最终版指标保存逻辑；保存成功后补上 offline -> online 恢复推送。"""
+    result = _prev_save_agent_metrics_recovery_push_fix(payload)
+
+    ok = False
+    try:
+        ok = bool(result[0]) if isinstance(result, tuple) else bool(result)
+    except Exception:
+        ok = False
+
+    if ok:
+        sid = str(payload.get("server_id") or payload.get("sid") or "").strip()
+        mark_server_online_from_agent_report(sid)
+
+    return result
 
 if __name__ == "__main__":
     init_db()
