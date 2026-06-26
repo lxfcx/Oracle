@@ -265,9 +265,29 @@ def save_agent_metrics(payload):
             now_text(),
             json.dumps(payload, ensure_ascii=False),
         ))
+        # Agent 上报代表服务器已经在线。
+        # 旧版这里直接 INSERT OR REPLACE last_status='online'，会把 offline 静默覆盖成 online，
+        # 导致后面的 monitor_server_online_status() 看不到 offline -> online 变化，因此不会推送“服务器恢复在线”。
+        # 修复：如果旧状态是 offline，先推送一次恢复在线，再更新状态；如果本来就是 online，只更新时间。
         try:
-            conn.execute("INSERT OR REPLACE INTO server_status(server_id,last_status,last_checked_at,last_changed_at) VALUES(?,?,?,COALESCE((SELECT last_changed_at FROM server_status WHERE server_id=?),?))",
-                         (sid, "online", now_text(), sid, now_text()))
+            old_status_row = conn.execute("SELECT last_status FROM server_status WHERE server_id=?", (sid,)).fetchone()
+            old_status = (old_status_row["last_status"] if old_status_row else "")
+            if old_status_row:
+                if old_status != "online":
+                    conn.execute("UPDATE server_status SET last_status=?, last_checked_at=?, last_changed_at=? WHERE server_id=?",
+                                 ("online", now_text(), now_text(), sid))
+                    srv = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+                    if srv and old_status == "offline":
+                        try:
+                            push_event("online", f"服务器恢复在线：{srv['name']}", online_push_text(srv))
+                        except Exception:
+                            pass
+                else:
+                    conn.execute("UPDATE server_status SET last_status=?, last_checked_at=? WHERE server_id=?",
+                                 ("online", now_text(), sid))
+            else:
+                conn.execute("INSERT INTO server_status(server_id,last_status,last_checked_at,last_changed_at) VALUES(?,?,?,?)",
+                             (sid, "online", now_text(), now_text()))
         except Exception:
             pass
         conn.commit()
