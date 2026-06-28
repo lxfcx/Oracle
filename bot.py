@@ -7029,6 +7029,295 @@ def poll():
             pass
     return _prev_poll_recovery_v2()
 
+
+
+# ============================================================
+# BOOT / REBOOT ONLINE NOTICE FIX V5
+# 只新增“关机/重启后恢复在线”的通知记录，不执行任何关机/重启命令。
+# 解决场景：机器人所在机器关机期间无法监控自己；开机后状态仍可能是 online，
+# 因此不会产生 offline -> online 变化。这里通过 boot_id/boot_time 变化补发恢复通知。
+# 同时修复探针上报时状态被提前改成 online 导致恢复推送丢失的问题。
+# 必须放在 if __name__ == "__main__" 之前。
+# ============================================================
+
+BOOT_NOTICE_DEDUP_SECONDS = int(os.getenv("BOOT_NOTICE_DEDUP_SECONDS", "180"))
+
+
+def _bootfix_get_local_state(key, default=""):
+    try:
+        conn = db()
+        row = conn.execute("SELECT value FROM local_profile WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return row["value"] if row and row["value"] is not None else default
+    except Exception:
+        return default
+
+
+def _bootfix_set_local_state(key, value):
+    try:
+        conn = db()
+        conn.execute("INSERT OR REPLACE INTO local_profile(key,value) VALUES(?,?)", (key, str(value or "")))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _bootfix_current_boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id", "r", encoding="utf-8", errors="ignore") as f:
+            v = f.read().strip()
+            if v:
+                return v
+    except Exception:
+        pass
+    try:
+        return str(int(psutil.boot_time()))
+    except Exception:
+        return ""
+
+
+def _bootfix_current_boot_time_text():
+    try:
+        return datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return "未知"
+
+
+def _bootfix_recent_event(conn, event_type, title, seconds=180):
+    try:
+        since = (datetime.now() - timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
+        row = conn.execute(
+            "SELECT 1 FROM events WHERE event_type=? AND title=? AND created_at>=? ORDER BY id DESC LIMIT 1",
+            (event_type, title, since)
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def local_reboot_online_push_text(old_boot_time="", new_boot_time=""):
+    try:
+        s = get_local_status()
+        hostname = s.get("hostname") or socket.gethostname()
+        public_ip = s.get("public_ip") or "未知"
+        flag = s.get("flag") or "🌐"
+        place = " ".join(x for x in [s.get("country"), s.get("region"), s.get("city")] if x and x != "未知") or s.get("country") or "未知"
+        uptime = s.get("uptime") or uptime_text()
+    except Exception:
+        hostname = socket.gethostname()
+        public_ip = "未知"
+        flag = "🌐"
+        place = "未知"
+        uptime = uptime_text()
+    return (
+        "✅🟢 <b>主控服务器重启后恢复在线</b> 🟢✅\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🖥️ <b>主机：</b><code>{h(hostname)}</code>\n"
+        f"🌐 <b>公网 IP：</b><code>{h(public_ip)}</code>\n"
+        f"📍 <b>地区：</b>{h(flag)} {h(place)}\n"
+        f"🕘 <b>上次启动：</b>{h(old_boot_time or '首次记录/未知')}\n"
+        f"🕒 <b>本次启动：</b>{h(new_boot_time or _bootfix_current_boot_time_text())}\n"
+        f"⏱️ <b>当前运行：</b>{h(uptime)}\n"
+        f"⏰ <b>通知时间：</b>{now_text()}\n"
+        "━━━━━━━━━━━━━━\n"
+        "📌 <b>当前状态：</b>🟢 在线\n"
+        "ℹ️ <b>说明：</b>检测到系统 boot_id 已变化，说明机器发生过关机/重启。"
+    )
+
+
+def notify_local_reboot_online_once():
+    """机器人主机开机/重启后补发在线通知。首次安装只记录，不误报。"""
+    cur_boot_id = _bootfix_current_boot_id()
+    cur_boot_time = _bootfix_current_boot_time_text()
+    if not cur_boot_id:
+        return False
+
+    old_boot_id = _bootfix_get_local_state("last_boot_id", "")
+    old_boot_time = _bootfix_get_local_state("last_boot_time", "")
+
+    if not old_boot_id:
+        _bootfix_set_local_state("last_boot_id", cur_boot_id)
+        _bootfix_set_local_state("last_boot_time", cur_boot_time)
+        return False
+
+    if old_boot_id == cur_boot_id:
+        return False
+
+    title = f"主控服务器重启恢复在线：{socket.gethostname()}"
+    try:
+        conn = db()
+        if _bootfix_recent_event(conn, "online", title, BOOT_NOTICE_DEDUP_SECONDS):
+            conn.close()
+            _bootfix_set_local_state("last_boot_id", cur_boot_id)
+            _bootfix_set_local_state("last_boot_time", cur_boot_time)
+            return False
+        conn.close()
+    except Exception:
+        pass
+
+    _bootfix_set_local_state("last_boot_id", cur_boot_id)
+    _bootfix_set_local_state("last_boot_time", cur_boot_time)
+    try:
+        push_event("online", title, local_reboot_online_push_text(old_boot_time, cur_boot_time))
+        return True
+    except Exception as e:
+        try:
+            print(f"[BOT] local reboot online push failed: {e}", flush=True)
+        except Exception:
+            pass
+        return False
+
+
+def agent_reboot_online_push_text(r, old_boot_time="", new_boot_time=""):
+    return (
+        "✅🟢 <b>服务器重启后恢复在线</b> 🟢✅\n\n"
+        "━━━━━━━━━━━━━━\n"
+        f"🖥️ <b>名称：</b>{h(r['name'])}\n"
+        f"📍 <b>地区：</b>{server_location_line(r)}\n"
+        f"🌐 <b>主机：</b><code>{h(r['host'])}:{h(r['check_port'])}</code>\n"
+        f"📝 <b>备注：</b>{h(r['note'] or '无')}\n"
+        f"🕘 <b>上次启动：</b>{h(old_boot_time or '未知')}\n"
+        f"🕒 <b>本次启动：</b>{h(new_boot_time or '未知')}\n"
+        f"⏰ <b>通知时间：</b>{now_text()}\n"
+        "━━━━━━━━━━━━━━\n"
+        "📌 <b>当前状态：</b>🟢 在线\n"
+        "ℹ️ <b>说明：</b>探针上报的 boot_time 已变化，判断该服务器发生过关机/重启。"
+    )
+
+
+def _force_online_recovery_push_v5(sid, reason_text=""):
+    """即使前面的 save_agent_metrics 已把状态改成 online，也能根据上报前状态补发一次恢复通知。"""
+    sid = str(sid or "").strip()
+    if not sid.isdigit():
+        return False
+    now = now_text()
+    conn = db()
+    try:
+        srv = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+        if not srv:
+            return False
+        title = f"服务器恢复在线：{srv['name']}"
+        if _bootfix_recent_event(conn, "online", title, BOOT_NOTICE_DEDUP_SECONDS):
+            return False
+        try:
+            if "ensure_alert_threshold_columns" in globals():
+                ensure_alert_threshold_columns()
+        except Exception:
+            pass
+        conn.execute(
+            """INSERT OR REPLACE INTO server_status(
+                server_id,last_status,last_checked_at,last_changed_at,
+                fail_count,success_count,notified_offline,first_fail_at,first_recover_at,online_since,offline_since
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (int(sid), "online", now, now, 0, 1, 0, "", "", now, "")
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        push_event("online", title, online_push_text(srv))
+        return True
+    except Exception as e:
+        try:
+            print(f"[BOT] force online recovery v5 failed: {e}", flush=True)
+        except Exception:
+            pass
+        return False
+
+
+def _agent_reboot_push_once_v5(sid, old_boot_time, new_boot_time):
+    sid = str(sid or "").strip()
+    old_boot_time = str(old_boot_time or "").strip()
+    new_boot_time = str(new_boot_time or "").strip()
+    if not sid.isdigit() or not old_boot_time or not new_boot_time or old_boot_time == new_boot_time:
+        return False
+
+    conn = db()
+    try:
+        srv = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+        if not srv:
+            return False
+        key = f"agent_reboot:{sid}:{new_boot_time}"
+        old = conn.execute("SELECT 1 FROM alerts WHERE alert_key=?", (key,)).fetchone()
+        if old:
+            return False
+        conn.execute("INSERT OR REPLACE INTO alerts(alert_key,sent_at) VALUES(?,?)", (key, now_text()))
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        push_event("online", f"服务器重启恢复在线：{srv['name']}", agent_reboot_online_push_text(srv, old_boot_time, new_boot_time))
+        return True
+    except Exception as e:
+        try:
+            print(f"[BOT] agent reboot online push failed: {e}", flush=True)
+        except Exception:
+            pass
+        return False
+
+
+_prev_save_agent_metrics_boot_notice_v5 = save_agent_metrics
+
+
+def save_agent_metrics(payload):
+    sid = str(payload.get("server_id") or payload.get("sid") or "").strip()
+    was_offline = False
+    old_boot_time = ""
+
+    if sid.isdigit():
+        try:
+            conn = db()
+            st = conn.execute("SELECT last_status FROM server_status WHERE server_id=?", (sid,)).fetchone()
+            was_offline = bool(st and str(st["last_status"] or "").strip().lower() == "offline")
+            m = conn.execute("SELECT boot_time FROM server_metrics WHERE server_id=?", (sid,)).fetchone()
+            old_boot_time = str(m["boot_time"] or "").strip() if m else ""
+            conn.close()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    result = _prev_save_agent_metrics_boot_notice_v5(payload)
+
+    ok = False
+    try:
+        ok = bool(result[0]) if isinstance(result, tuple) else bool(result)
+    except Exception:
+        ok = False
+
+    if ok and sid.isdigit():
+        # 1) 探针上报前状态是 offline，但旧逻辑先静默改 online 时，这里补发恢复在线。
+        if was_offline:
+            _force_online_recovery_push_v5(sid)
+
+        # 2) 服务器关机/重启后，探针 boot_time 变化，即使状态没变成 offline，也要记录并推送。
+        new_boot_time = str(payload.get("boot_time") or "").strip()
+        _agent_reboot_push_once_v5(sid, old_boot_time, new_boot_time)
+
+    return result
+
+
+_prev_poll_boot_notice_v5 = poll
+
+
+def poll():
+    # 主控机重启后，poll 一启动就补发在线通知；首次安装只记录不推送。
+    try:
+        notify_local_reboot_online_once()
+    except Exception as e:
+        try:
+            print(f"[BOT] local reboot online notice failed: {e}", flush=True)
+        except Exception:
+            pass
+    return _prev_poll_boot_notice_v5()
+
+# ============================================================
+# END BOOT / REBOOT ONLINE NOTICE FIX V5
+# ============================================================
+
 if __name__ == "__main__":
     init_db()
     poll()
