@@ -4316,4 +4316,224 @@ def _apply_real_lamp_ai_fix():
 _apply_real_lamp_ai_fix()
 # ===== END REAL FIX =====
 
+
+# ===== DOM-LEVEL FIX ONLY: status lamp pseudo + AI card DOM/classes =====
+_DOM_LAMP_AI_FIX_CSS = r"""
+/* ===== dom-level status lamp + AI card only ===== */
+
+/* WebSocket/SSE 状态灯：不用依赖插入元素，直接用 ::before 强制显示 */
+html body [data-neon-live]{
+  display:inline-flex!important;
+  align-items:center!important;
+  gap:8px!important;
+}
+html body [data-neon-live]::before{
+  content:""!important;
+  display:inline-block!important;
+  width:11px!important;
+  height:11px!important;
+  min-width:11px!important;
+  min-height:11px!important;
+  border-radius:999px!important;
+  background:#22c55e!important;
+  box-shadow:0 0 10px rgba(34,197,94,1),0 0 28px rgba(34,197,94,.58)!important;
+  animation:domLampGreen 1.35s ease-in-out infinite!important;
+  vertical-align:middle!important;
+}
+html body [data-neon-live].dom-live-ws::before{
+  background:#22c55e!important;
+  box-shadow:0 0 10px rgba(34,197,94,1),0 0 28px rgba(34,197,94,.58)!important;
+  animation:domLampGreen 1.35s ease-in-out infinite!important;
+}
+html body [data-neon-live].dom-live-sse::before{
+  background:#facc15!important;
+  box-shadow:0 0 10px rgba(250,204,21,1),0 0 28px rgba(250,204,21,.58)!important;
+  animation:domLampYellow 1.35s ease-in-out infinite!important;
+}
+html body [data-neon-live].dom-live-bad::before{
+  background:#ef4444!important;
+  box-shadow:0 0 10px rgba(239,68,68,1),0 0 28px rgba(239,68,68,.60)!important;
+  animation:domLampRed 1.35s ease-in-out infinite!important;
+}
+html body [data-neon-live].dom-live-connecting::before{
+  background:#f59e0b!important;
+  box-shadow:0 0 10px rgba(245,158,11,1),0 0 28px rgba(245,158,11,.55)!important;
+  animation:domLampAmber 1.35s ease-in-out infinite!important;
+}
+@keyframes domLampGreen{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.18);opacity:.96}}
+@keyframes domLampYellow{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.16);opacity:.96}}
+@keyframes domLampAmber{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.16);opacity:.96}}
+@keyframes domLampRed{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.16);opacity:.96}}
+
+/* AI 故障判断：只作用新 ai-fault-card，不碰其它指标 */
+html body .metric-extra .ai-fault-card,
+html body .servercard .metric-extra .ai-fault-card,
+html body .card .metric-extra .ai-fault-card{
+  display:block!important;
+  width:100%!important;
+  min-width:0!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:10px 0 0!important;
+  padding:10px 11px!important;
+  border-radius:15px!important;
+  border:1px solid rgba(125,211,252,.24)!important;
+  background:linear-gradient(135deg,rgba(34,211,238,.13),rgba(96,165,250,.09),rgba(52,211,153,.08))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 8px 22px rgba(14,165,233,.10)!important;
+  overflow:visible!important;
+}
+html body .metric-extra .ai-fault-card b{
+  display:block!important;
+  width:100%!important;
+  margin:0 0 6px!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+  background:none!important;
+  background-image:none!important;
+  -webkit-background-clip:initial!important;
+  background-clip:initial!important;
+  font-size:12px!important;
+  line-height:1.3!important;
+  font-weight:1000!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
+}
+html body .metric-extra .ai-fault-card > span,
+html body .metric-extra .ai-fault-card > div,
+html body .metric-extra .ai-fault-card [data-ai],
+html body .metric-extra .ai-fault-card [data-local-ai]{
+  display:block!important;
+  width:100%!important;
+  min-width:0!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:normal!important;
+  word-break:break-word!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  line-height:1.45!important;
+  font-size:11.5px!important;
+  letter-spacing:0!important;
+  font-weight:950!important;
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  text-shadow:none!important;
+}
+html.light body .metric-extra .ai-fault-card{
+  border-color:rgba(37,99,235,.17)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.62),rgba(219,234,254,.46),rgba(240,253,250,.36))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.76),0 8px 20px rgba(37,99,235,.08)!important;
+}
+html.light body .metric-extra .ai-fault-card b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light body .metric-extra .ai-fault-card > span,
+html.light body .metric-extra .ai-fault-card > div,
+html.light body .metric-extra .ai-fault-card [data-ai],
+html.light body .metric-extra .ai-fault-card [data-local-ai]{
+  background:linear-gradient(90deg,#0369a1,#2563eb,#7c3aed,#059669)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  -webkit-text-fill-color:transparent!important;
+}
+/* ===== end dom-level status lamp + AI card only ===== */
+"""
+
+_DOM_LAMP_AI_FIX_JS = r"""
+<script>
+(function(){
+  function fixLiveStatusLamp(){
+    var chip = document.querySelector('[data-neon-live]');
+    if(!chip) return;
+    var t = (chip.textContent || '').replace(/\s+/g,' ');
+    chip.classList.remove('dom-live-ws','dom-live-sse','dom-live-bad','dom-live-connecting');
+    if(/WebSocket/i.test(t)) chip.classList.add('dom-live-ws');
+    else if(/\bSSE\b/i.test(t)) chip.classList.add('dom-live-sse');
+    else if(/轮询|回退|失败|断开|错误|异常/i.test(t)) chip.classList.add('dom-live-bad');
+    else chip.classList.add('dom-live-connecting');
+  }
+
+  function convertAiFaultCards(){
+    document.querySelectorAll('.metric-extra .mini.ai-mini').forEach(function(box){
+      box.classList.remove('mini');
+      box.classList.remove('ai-mini');
+      box.classList.add('ai-fault-card');
+
+      box.style.setProperty('display','block','important');
+      box.style.setProperty('grid-template-columns','none','important');
+      box.style.setProperty('width','100%','important');
+      box.style.setProperty('height','auto','important');
+      box.style.setProperty('overflow','visible','important');
+
+      var title = box.querySelector('b');
+      if(title){
+        title.style.setProperty('display','block','important');
+        title.style.setProperty('width','100%','important');
+        title.style.setProperty('margin','0 0 6px','important');
+      }
+      var data = box.querySelector('[data-ai], [data-local-ai], span');
+      if(data){
+        data.style.setProperty('display','block','important');
+        data.style.setProperty('width','100%','important');
+        data.style.setProperty('white-space','normal','important');
+        data.style.setProperty('word-break','break-word','important');
+        data.style.setProperty('overflow','visible','important');
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    fixLiveStatusLamp();
+    convertAiFaultCards();
+
+    var chip = document.querySelector('[data-neon-live]');
+    if(chip){
+      try{
+        new MutationObserver(fixLiveStatusLamp).observe(chip,{childList:true,characterData:true,subtree:true});
+      }catch(e){}
+    }
+
+    setInterval(function(){
+      fixLiveStatusLamp();
+      convertAiFaultCards();
+    }, 800);
+  });
+})();
+</script>
+"""
+
+def _patch_ai_templates_to_fault_card():
+    global DASH, SERVERS, LOCAL
+    for name in ('DASH', 'SERVERS'):
+        val = globals().get(name, '')
+        val = val.replace(
+            '<div class="mini ai-mini"><b>AI 故障判断</b><span data-ai="{{s.id}}">{{ai_fault_html(s)}}</span></div>',
+            '<div class="ai-fault-card"><b>AI 故障判断</b><div data-ai="{{s.id}}">{{ai_fault_html(s)}}</div></div>'
+        )
+        globals()[name] = val
+    val = globals().get('LOCAL', '')
+    val = val.replace(
+        '<div class="mini ai-mini"><b>AI 故障判断</b><span data-local-ai>本机实时判断中</span></div>',
+        '<div class="ai-fault-card"><b>AI 故障判断</b><div data-local-ai>本机实时判断中</div></div>'
+    )
+    globals()['LOCAL'] = val
+
+def _apply_dom_lamp_ai_fix():
+    global BASE
+    _patch_ai_templates_to_fault_card()
+    if 'dom-level status lamp + AI card only' not in BASE:
+        BASE = BASE.replace('</style><script>', _DOM_LAMP_AI_FIX_CSS + '</style><script>')
+    # 放到 body 末尾，避免 head 注入位置被旧脚本结构影响。
+    if 'fixLiveStatusLamp' not in BASE:
+        BASE = BASE.replace('</body></html>', _DOM_LAMP_AI_FIX_JS + '</body></html>')
+
+_apply_dom_lamp_ai_fix()
+# ===== END DOM-LEVEL FIX ONLY =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
