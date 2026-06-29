@@ -4775,4 +4775,215 @@ def _apply_view_dropdown_expand_patch():
 _apply_view_dropdown_expand_patch()
 # ===== END USER PATCH =====
 
+
+# ===== USER PATCH: compact view must be small grid cards like screenshot =====
+_COMPACT_CARD_VIEW_CSS = r"""
+/* ===== compact cards grid view like screenshot ===== */
+.compact-list.compact-cardgrid-view{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fit,minmax(255px,1fr))!important;
+  gap:14px!important;
+  align-items:stretch!important;
+}
+.compact-list.compact-cardgrid-view.hidden{display:none!important}
+.compact-list.compact-cardgrid-view .compact-server,
+.compact-mini-card{
+  display:block!important;
+  min-height:0!important;
+  height:auto!important;
+  padding:12px 14px!important;
+  border-radius:14px!important;
+  border:1px solid rgba(15,23,42,.28)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.70),rgba(226,232,240,.52))!important;
+  box-shadow:0 10px 24px rgba(15,23,42,.22), inset 0 1px 0 rgba(255,255,255,.35)!important;
+  overflow:hidden!important;
+  position:relative!important;
+}
+html:not(.light) .compact-list.compact-cardgrid-view .compact-server,
+html:not(.light) .compact-mini-card{
+  background:linear-gradient(135deg,rgba(226,232,240,.72),rgba(203,213,225,.55))!important;
+  color:#0f172a!important;
+}
+html.light .compact-list.compact-cardgrid-view .compact-server,
+html.light .compact-mini-card{
+  background:linear-gradient(135deg,rgba(255,255,255,.84),rgba(219,234,254,.66))!important;
+  border-color:rgba(37,99,235,.16)!important;
+  box-shadow:0 10px 24px rgba(37,99,235,.12), inset 0 1px 0 rgba(255,255,255,.75)!important;
+}
+.compact-mini-card.expire-danger{
+  border-color:rgba(239,68,68,.86)!important;
+  background:
+    repeating-linear-gradient(45deg,rgba(239,68,68,.18) 0 18px,rgba(255,255,255,.18) 18px 36px),
+    linear-gradient(135deg,rgba(255,255,255,.68),rgba(226,232,240,.52))!important;
+}
+.compact-mini-card .compact-top{
+  display:flex!important;
+  align-items:center!important;
+  justify-content:space-between!important;
+  gap:8px!important;
+  margin-bottom:8px!important;
+}
+.compact-mini-card .compact-title{
+  display:flex!important;
+  align-items:center!important;
+  gap:6px!important;
+  min-width:0!important;
+  font-weight:1000!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+.compact-mini-card .compact-title .name{
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  white-space:nowrap!important;
+}
+.compact-mini-card .compact-info{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-decoration:none!important;
+  font-weight:1000!important;
+  opacity:.9!important;
+}
+.compact-mini-card .compact-tags{
+  display:flex!important;
+  flex-wrap:wrap!important;
+  gap:6px!important;
+  margin:5px 0 8px!important;
+}
+.compact-mini-card .mini-tag{
+  display:inline-flex!important;
+  align-items:center!important;
+  gap:4px!important;
+  padding:4px 7px!important;
+  border-radius:8px!important;
+  background:rgba(255,255,255,.32)!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  font-size:12px!important;
+  line-height:1.2!important;
+  font-weight:900!important;
+}
+.compact-mini-card .mini-tag.bad{color:#e11d48!important;-webkit-text-fill-color:#e11d48!important}
+.compact-mini-card .mini-tag.ok{color:#059669!important;-webkit-text-fill-color:#059669!important}
+.compact-mini-card .compact-divider{height:1px;background:rgba(15,23,42,.18);margin:8px 0!important}
+.compact-mini-card .compact-stat-row{
+  display:grid!important;
+  grid-template-columns:repeat(4,minmax(0,1fr))!important;
+  gap:7px!important;
+  align-items:center!important;
+  margin:6px 0!important;
+  color:#0f172a!important;
+}
+.compact-mini-card .compact-stat{
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  font-size:12px!important;
+  font-weight:950!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+}
+.compact-mini-card .compact-net-row{
+  display:grid!important;
+  grid-template-columns:1fr 1fr!important;
+  gap:10px!important;
+  margin:7px 0!important;
+  font-size:12px!important;
+  line-height:1.35!important;
+  font-weight:950!important;
+}
+.compact-mini-card .compact-net-row span{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  font-variant-numeric:tabular-nums!important;
+}
+.compact-mini-card .compact-net-row b{
+  color:#6d28d9!important;
+  -webkit-text-fill-color:#6d28d9!important;
+  font-size:18px!important;
+  margin-right:4px!important;
+  vertical-align:middle!important;
+}
+.compact-mini-card .compact-foot{
+  display:flex!important;
+  justify-content:space-between!important;
+  gap:8px!important;
+  margin-top:8px!important;
+  font-size:12px!important;
+  font-weight:900!important;
+  color:#0f172a!important;
+}
+.compact-mini-card .compact-foot span{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+.compact-mini-card .compact-actions{
+  margin-top:8px!important;
+  display:flex!important;
+  gap:7px!important;
+  justify-content:flex-end!important;
+}
+.compact-mini-card .compact-actions .btn,
+.compact-mini-card .compact-actions button{
+  padding:5px 8px!important;
+  font-size:12px!important;
+  border-radius:9px!important;
+}
+@media(max-width:760px){
+  .compact-list.compact-cardgrid-view{grid-template-columns:1fr!important}
+  .compact-mini-card .compact-net-row{grid-template-columns:1fr!important}
+}
+/* ===== end compact cards grid view ===== */
+"""
+
+def _compact_cards_view_html():
+    return """<div data-view-compact class="hidden compact-list compact-cardgrid-view">{% for s in data.servers %}{% set m=s.metrics %}
+<div class="compact-server compact-mini-card {{server_card_class(s)}}">
+  <div class="compact-top">
+    <div class="compact-title">{{flag_icon(s)|safe}}<span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span><span class="name">{{s.name}}</span></div>
+    <a class="compact-info" href="/servers/{{s.id}}">ⓘ</a>
+  </div>
+  <div class="compact-tags">
+    <span class="mini-tag {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span>
+    <span class="mini-tag {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span>
+  </div>
+  <div class="compact-divider"></div>
+  <div class="compact-stat-row">
+    <div class="compact-stat">⚙️ <span data-cputxt="{{s.id}}">{{'%.0f'|format(m.cpu_percent or 0)}}%</span></div>
+    <div class="compact-stat">▰ <span data-memtxt="{{s.id}}">{{'%.0f'|format(m.mem_percent or 0)}}%</span></div>
+    <div class="compact-stat">▣ <span data-disktxt="{{s.id}}">{{'%.0f'|format(m.disk_percent or 0)}}%</span></div>
+    <div class="compact-stat">⚡ {{'%.2f'|format(m.load1 or 0)}} | {{'%.2f'|format(m.load5 or 0)}} | {{'%.2f'|format(m.load15 or 0)}}</div>
+  </div>
+  <div class="compact-net-row">
+    <span><b>⌁</b><span data-netspeed="{{s.id}}">↑ 0B/s<br>↓ 0B/s</span></span>
+    <span><b>↕</b><span data-traffic="{{s.id}}">↑ 0B<br>↓ 0B</span></span>
+  </div>
+  <div class="compact-foot">
+    <span>到期：{{display_expire_label(s)}}</span>
+    <span>{% if s.online %}在线：<span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span>{% else %}离线{% endif %}</span>
+  </div>
+  <div class="compact-actions">
+    <button type=button onclick="setView('table');toggleTableDetail('{{s.id}}')">展开</button>
+    <a class=btn href="/servers/{{s.id}}">详情</a>
+  </div>
+</div>{% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>"""
+
+def _replace_compact_block(template):
+    new_block = _compact_cards_view_html()
+    return re.sub(
+        r'<div data-view-compact class="hidden compact-list">.*?(?=<div data-view-table class=hidden>)',
+        new_block,
+        template,
+        count=1,
+        flags=re.S
+    )
+
+def _apply_compact_cards_view_fix():
+    global BASE, DASH, SERVERS
+    if 'compact cards grid view like screenshot' not in BASE:
+        BASE = BASE.replace('</style><script>', _COMPACT_CARD_VIEW_CSS + '</style><script>')
+    DASH = _replace_compact_block(DASH)
+    SERVERS = _replace_compact_block(SERVERS)
+
+_apply_compact_cards_view_fix()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
