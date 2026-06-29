@@ -2834,4 +2834,127 @@ def _apply_final_title_map_patch():
 _apply_final_title_map_patch()
 # ===== END FINAL USER PATCH =====
 
+# ===== SCREENSHOT FEEDBACK PATCH: light expiry visibility + better world map + stable network boxes =====
+_SCREENSHOT_FIX_CSS = r'''
+/* ===== screenshot feedback patch ===== */
+.expire-progress-wrap{position:relative!important;overflow:hidden!important}
+.expire-progress-wrap .expire-progress{position:relative!important}
+.expire-progress-wrap .expire-bar{min-width:12px!important;position:relative!important}
+.expire-progress-wrap .expire-bar::after{content:""!important;position:absolute!important;inset:0!important;background:linear-gradient(90deg,rgba(255,255,255,.00),rgba(255,255,255,.28),rgba(255,255,255,.00))!important;mix-blend-mode:screen!important;animation:expSheen 2.7s linear infinite!important}
+html.light .expire-progress-wrap{background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(250,245,255,.92))!important;border-color:rgba(168,85,247,.18)!important;box-shadow:0 8px 18px rgba(168,85,247,.08), inset 0 1px 0 rgba(255,255,255,.95)!important}
+html.light .expire-progress-wrap .expire-progress{background:linear-gradient(180deg,rgba(192,132,252,.12),rgba(244,114,182,.08))!important;box-shadow:inset 0 0 0 1px rgba(168,85,247,.10)!important}
+html.light .expire-progress-wrap .expire-progress-title span,
+html.light .expire-progress-wrap .expire-progress-title b{color:#7c3aed!important;-webkit-text-fill-color:#7c3aed!important;text-shadow:none!important;font-weight:1000!important}
+html.light .expire-progress-wrap .expire-bar{filter:saturate(1.42) brightness(1.08)!important;box-shadow:0 0 0 1px rgba(255,255,255,.65),0 0 12px rgba(168,85,247,.16)!important}
+html.light .expire-progress-wrap.forever .expire-bar{box-shadow:0 0 0 1px rgba(255,255,255,.62),0 0 12px rgba(16,185,129,.18)!important}
+html.light .expire-progress-wrap.warn .expire-bar{box-shadow:0 0 0 1px rgba(255,255,255,.62),0 0 12px rgba(251,191,36,.18)!important}
+html.light .expire-progress-wrap.danger .expire-bar{box-shadow:0 0 0 1px rgba(255,255,255,.62),0 0 12px rgba(239,68,68,.18)!important}
+
+.metric-extra{align-items:stretch!important}
+.metric-extra .mini{display:flex!important;flex-direction:column!important;justify-content:space-between!important;align-items:flex-start!important;min-height:60px!important;overflow:hidden!important}
+.metric-extra .mini span,
+[data-netspeed],[data-traffic],[data-load],
+[data-local-netspeed],[data-local-traffic],[data-local-load]{display:block!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;min-height:1.45em!important;line-height:1.45!important;font-variant-numeric:tabular-nums!important;font-feature-settings:"tnum" 1!important;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important}
+
+.world-radar{background:radial-gradient(circle at 73% 43%,rgba(34,197,94,.11),transparent 11%),radial-gradient(circle at 44% 48%,rgba(56,189,248,.06),transparent 34%),linear-gradient(180deg,rgba(4,15,38,.76),rgba(15,23,42,.90))!important}
+.world-outline .landmass{fill:rgba(114,151,216,.20)!important;stroke:rgba(158,184,224,.50)!important;stroke-width:2.1!important;stroke-linejoin:round!important}
+.world-outline .island{fill:rgba(114,151,216,.18)!important;stroke:rgba(158,184,224,.42)!important;stroke-width:1.7!important;stroke-linejoin:round!important}
+.world-link{opacity:.52!important}
+@keyframes expSheen{0%{transform:translateX(-110%)}100%{transform:translateX(110%)}}
+/* ===== end screenshot feedback patch ===== */
+'''
+
+
+def _world_map_svg():
+    return """<svg class=\"world-svg\" viewBox=\"0 0 1000 520\" preserveAspectRatio=\"none\" aria-hidden=\"true\">\n    <g class=\"world-outline\">\n      <polygon class=\"landmass\" points=\"46,232 60,182 88,150 80,120 126,92 186,100 242,126 274,160 275,196 238,220 190,214 158,214 130,224 108,256\" />\n      <polygon class=\"landmass\" points=\"242,290 294,320 318,374 300,436 270,478 234,468 214,410 220,348\" />\n      <polygon class=\"island\" points=\"444,118 486,103 528,110 534,138 492,154 456,146\" />\n      <polygon class=\"landmass\" points=\"406,160 450,148 500,152 548,166 604,172 646,188 676,214 720,216 738,200 778,198 838,186 886,192 910,210 896,228 858,234 834,250 800,260 772,252 760,234 734,232 708,246 688,280 654,292 626,332 578,336 546,322 512,346 478,336 454,312 430,294 400,276 376,252 392,198\" />\n      <polygon class=\"landmass\" points=\"520,354 560,360 594,380 584,410 548,420 506,408 494,384\" />\n      <polygon class=\"landmass\" points=\"736,298 784,308 836,334 898,382 892,426 846,450 784,444 742,420 720,378 722,334\" />\n      <polygon class=\"landmass\" points=\"822,226 862,220 900,224 930,244 918,264 884,272 850,266 818,252 806,236\" />\n      <polygon class=\"landmass\" points=\"728,220 754,188 792,176 820,182 800,204 786,224 758,238\" />\n      <polygon class=\"landmass\" points=\"896,434 926,430 956,444 952,472 922,484 892,470 886,452\" />\n      <polygon class=\"island\" points=\"520,126 548,116 572,126 566,142 540,148\" />\n      <polygon class=\"island\" points=\"796,128 820,122 842,132 836,146 814,148\" />\n    </g></svg>"""
+
+
+def _apply_screenshot_feedback_patch():
+    global BASE
+    if 'screenshot feedback patch' not in BASE:
+        BASE = BASE.replace('</style><script>', _SCREENSHOT_FIX_CSS + '</style><script>')
+
+
+_apply_screenshot_feedback_patch()
+# ===== END SCREENSHOT FEEDBACK PATCH =====
+
+# ===== FINAL UI FEEDBACK PATCH: light bars + live lamp + stable metrics + clean status dots =====
+_UI_FEEDBACK_CSS = r'''
+/* ===== final ui feedback patch ===== */
+html.light .expire-progress-wrap{background:linear-gradient(180deg,#ffffff,#faf5ff)!important;border:1px solid rgba(147,51,234,.16)!important;box-shadow:0 8px 18px rgba(124,58,237,.07),inset 0 1px 0 rgba(255,255,255,.95)!important}
+html.light .expire-progress-wrap .expire-progress{background:linear-gradient(180deg,rgba(99,102,241,.10),rgba(168,85,247,.05))!important;box-shadow:inset 0 0 0 1px rgba(124,58,237,.08)!important}
+html.light .expire-progress-wrap .expire-progress-title span,
+html.light .expire-progress-wrap .expire-progress-title b{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important;text-shadow:none!important;font-weight:1000!important}
+html.light .expire-progress-wrap .expire-bar,
+html.light .expire-progress-wrap.ok .expire-bar{background:linear-gradient(90deg,#16a34a,#06b6d4,#2563eb)!important;filter:saturate(1.45) brightness(1.08)!important;box-shadow:0 0 0 1px rgba(255,255,255,.82),0 0 12px rgba(37,99,235,.20)!important}
+html.light .expire-progress-wrap.warn .expire-bar{background:linear-gradient(90deg,#f59e0b,#eab308,#f97316)!important;filter:saturate(1.38) brightness(1.06)!important;box-shadow:0 0 0 1px rgba(255,255,255,.82),0 0 12px rgba(245,158,11,.22)!important}
+html.light .expire-progress-wrap.danger .expire-bar{background:linear-gradient(90deg,#dc2626,#ef4444,#f97316)!important;filter:saturate(1.34) brightness(1.05)!important;box-shadow:0 0 0 1px rgba(255,255,255,.82),0 0 12px rgba(220,38,38,.22)!important}
+html.light .expire-progress-wrap.forever .expire-bar{background:linear-gradient(90deg,#059669,#10b981,#0ea5e9)!important;filter:saturate(1.38) brightness(1.06)!important;box-shadow:0 0 0 1px rgba(255,255,255,.82),0 0 12px rgba(16,185,129,.22)!important}
+
+.neon-live-chip{position:relative!important;display:inline-flex!important;align-items:center!important;gap:8px!important;padding:6px 12px!important;padding-left:12px!important;border-radius:999px!important;font-weight:1000!important;letter-spacing:.2px!important}
+.neon-live-chip::before{content:""!important;display:inline-block!important;width:10px!important;height:10px!important;border-radius:50%!important;flex:0 0 10px!important;background:#fbbf24!important;box-shadow:0 0 12px rgba(251,191,36,.90),0 0 22px rgba(251,191,36,.36)!important;animation:lampPulseAmber 1.8s ease-in-out infinite!important}
+.neon-live-chip.is-live::before{background:#22c55e!important;box-shadow:0 0 12px rgba(34,197,94,.95),0 0 22px rgba(34,197,94,.40)!important;animation:lampPulseGreen 1.6s ease-in-out infinite!important}
+.neon-live-chip.is-sse::before{background:#facc15!important;box-shadow:0 0 12px rgba(250,204,21,.95),0 0 22px rgba(250,204,21,.40)!important;animation:lampPulseAmber 1.7s ease-in-out infinite!important}
+.neon-live-chip.is-poll::before,.neon-live-chip.is-down::before{background:#ef4444!important;box-shadow:0 0 12px rgba(239,68,68,.95),0 0 22px rgba(239,68,68,.42)!important;animation:lampPulseRed 1.7s ease-in-out infinite!important}
+.neon-live-chip.is-connecting::before{background:#f59e0b!important;box-shadow:0 0 12px rgba(245,158,11,.95),0 0 22px rgba(245,158,11,.42)!important;animation:lampPulseAmber 1.8s ease-in-out infinite!important}
+@keyframes lampPulseGreen{0%,100%{opacity:1;box-shadow:0 0 10px rgba(34,197,94,.90),0 0 22px rgba(34,197,94,.34)}50%{opacity:.98;box-shadow:0 0 14px rgba(34,197,94,1),0 0 30px rgba(34,197,94,.46)}}
+@keyframes lampPulseAmber{0%,100%{opacity:1;box-shadow:0 0 10px rgba(250,204,21,.90),0 0 22px rgba(250,204,21,.34)}50%{opacity:.98;box-shadow:0 0 14px rgba(250,204,21,1),0 0 30px rgba(250,204,21,.46)}}
+@keyframes lampPulseRed{0%,100%{opacity:1;box-shadow:0 0 10px rgba(239,68,68,.90),0 0 22px rgba(239,68,68,.34)}50%{opacity:.98;box-shadow:0 0 14px rgba(239,68,68,1),0 0 30px rgba(239,68,68,.46)}}
+
+.metric-extra{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:8px!important;align-items:stretch!important}
+.metric-extra .mini{min-width:0!important;min-height:68px!important;overflow:hidden!important;padding:8px 8px!important}
+.metric-extra .mini b{margin-bottom:4px!important}
+.metric-extra .mini span,
+[data-netspeed],[data-traffic],[data-load],
+[data-local-netspeed],[data-local-traffic],[data-local-load]{display:-webkit-box!important;-webkit-line-clamp:2!important;-webkit-box-orient:vertical!important;white-space:normal!important;word-break:break-word!important;overflow:hidden!important;line-height:1.25!important;min-height:2.5em!important;height:2.5em!important;font-size:10.5px!important;font-variant-numeric:tabular-nums!important;font-feature-settings:"tnum" 1!important;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important}
+
+.server-title{overflow:visible!important;align-items:center!important}
+.server-title .dot{width:14px!important;height:14px!important;min-width:14px!important;min-height:14px!important;display:inline-block!important;border-radius:999px!important;overflow:visible!important;flex:0 0 14px!important;position:relative!important;top:0!important;margin-right:3px!important;background:#22c55e!important;border:none!important;outline:none!important;box-shadow:none!important}
+.server-title .dot.online{background:#22c55e!important;animation:serverLampGreen 1.6s ease-in-out infinite!important;box-shadow:0 0 10px rgba(34,197,94,.96),0 0 18px rgba(34,197,94,.55)!important}
+.server-title .dot.offline{background:#ef4444!important;animation:serverLampRed 1.6s ease-in-out infinite!important;box-shadow:0 0 10px rgba(239,68,68,.96),0 0 18px rgba(239,68,68,.55)!important}
+@keyframes serverLampGreen{0%,100%{opacity:1;box-shadow:0 0 10px rgba(34,197,94,.94),0 0 18px rgba(34,197,94,.52)}50%{opacity:.98;box-shadow:0 0 14px rgba(34,197,94,1),0 0 24px rgba(34,197,94,.65)}}
+@keyframes serverLampRed{0%,100%{opacity:1;box-shadow:0 0 10px rgba(239,68,68,.94),0 0 18px rgba(239,68,68,.52)}50%{opacity:.98;box-shadow:0 0 14px rgba(239,68,68,1),0 0 24px rgba(239,68,68,.65)}}
+html.light .server-title .dot.online{box-shadow:0 0 10px rgba(34,197,94,.95),0 0 18px rgba(34,197,94,.54)!important}
+html.light .server-title .dot.offline{box-shadow:0 0 10px rgba(239,68,68,.95),0 0 18px rgba(239,68,68,.54)!important}
+
+@media(max-width:980px){.metric-extra{grid-template-columns:1fr!important}}
+/* ===== end final ui feedback patch ===== */
+'''
+
+_UI_FEEDBACK_JS = r'''
+<script>
+(function(){
+  function syncLiveChip(){
+    var chip=document.querySelector('[data-neon-live]');
+    if(!chip) return;
+    var t=(chip.textContent||'').trim();
+    chip.classList.remove('is-live','is-sse','is-poll','is-down','is-connecting');
+    if(/WebSocket/i.test(t)) chip.classList.add('is-live');
+    else if(/\bSSE\b/i.test(t)) chip.classList.add('is-sse');
+    else if(/轮询|回退|失败|断开|错误/i.test(t)) chip.classList.add('is-poll');
+    else chip.classList.add('is-connecting');
+  }
+  document.addEventListener('DOMContentLoaded',function(){
+    var chip=document.querySelector('[data-neon-live]');
+    if(chip){
+      syncLiveChip();
+      try{ new MutationObserver(syncLiveChip).observe(chip,{childList:true,characterData:true,subtree:true}); }catch(e){}
+    }
+  });
+})();
+</script>
+'''
+
+
+def _apply_ui_feedback_patch():
+    global BASE
+    if 'final ui feedback patch' not in BASE:
+        BASE = BASE.replace('</style><script>', _UI_FEEDBACK_CSS + '</style><script>')
+    if '_UI_FEEDBACK_JS' not in BASE:
+        BASE = BASE.replace('</script></head><body>', '</script>' + _UI_FEEDBACK_JS + '</head><body>')
+
+
+_apply_ui_feedback_patch()
+# ===== END FINAL UI FEEDBACK PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
