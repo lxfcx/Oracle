@@ -2957,209 +2957,9 @@ def _apply_ui_feedback_patch():
 _apply_ui_feedback_patch()
 # ===== END FINAL UI FEEDBACK PATCH =====
 
-# ===== FINAL METRIC DISPLAY PATCH: readable two-line metrics + visible live status lamp =====
-def _fmt_metric_unit(n, suffix=''):
-    try:
-        n = float(n or 0)
-    except Exception:
-        return '0 B' + suffix
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-    i = 0
-    while abs(n) >= 1024 and i < len(units) - 1:
-        n /= 1024.0
-        i += 1
-    if i == 0:
-        s = f'{n:.0f} {units[i]}'
-    elif abs(n) < 10:
-        s = f'{n:.2f} {units[i]}'
-    elif abs(n) < 100:
-        s = f'{n:.1f} {units[i]}'
-    else:
-        s = f'{n:.0f} {units[i]}'
-    return s + suffix
 
-def _metric_two_lines(up_value, down_value, suffix=''):
-    return (
-        f'<span class="metric-line metric-up">↑ {_fmt_metric_unit(up_value, suffix)}</span>'
-        f'<span class="metric-line metric-down">↓ {_fmt_metric_unit(down_value, suffix)}</span>'
-    )
-
-def _metric_load_lines(load1, load5, load15):
-    try: l1 = float(load1 or 0)
-    except Exception: l1 = 0.0
-    try: l5 = float(load5 or 0)
-    except Exception: l5 = 0.0
-    try: l15 = float(load15 or 0)
-    except Exception: l15 = 0.0
-    return (
-        f'<span class="metric-line">1m {l1:.2f}</span>'
-        f'<span class="metric-line">5m {l5:.2f}</span>'
-        f'<span class="metric-line">15m {l15:.2f}</span>'
-    )
-
-_PREV_METRIC_JSON_FOR_DISPLAY = metric_json
-def metric_json(x):
-    j = _PREV_METRIC_JSON_FOR_DISPLAY(x)
-    j['net_speed_html'] = _metric_two_lines(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
-    j['traffic_html'] = _metric_two_lines(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
-    j['load_html'] = _metric_load_lines(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
-    return j
-
-_PREV_LOCAL_LIVE_JSON_FOR_DISPLAY = _local_live_json
-def _local_live_json():
-    j = _PREV_LOCAL_LIVE_JSON_FOR_DISPLAY()
-    j['net_speed_html'] = _metric_two_lines(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
-    j['traffic_html'] = _metric_two_lines(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
-    j['load_html'] = _metric_load_lines(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
-    return j
-
-_METRIC_DISPLAY_FIX_CSS = r"""
-/* ===== metric display and live lamp final patch ===== */
-.metric-extra{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:8px!important;align-items:stretch!important}
-.metric-extra .mini{min-width:0!important;min-height:86px!important;height:86px!important;display:flex!important;flex-direction:column!important;justify-content:flex-start!important;align-items:stretch!important;overflow:hidden!important;padding:9px 10px!important}
-.metric-extra .mini b{display:block!important;flex:0 0 auto!important;margin:0 0 6px!important;line-height:1.15!important;font-size:11px!important}
-.metric-extra .mini span:not(.metric-line){display:block!important;white-space:normal!important;overflow:visible!important;height:auto!important;min-height:0!important;line-height:1.32!important}
-.metric-extra .mini .metric-line,
-[data-netspeed] .metric-line,[data-traffic] .metric-line,[data-load] .metric-line,
-[data-local-netspeed] .metric-line,[data-local-traffic] .metric-line,[data-local-load] .metric-line{
-  display:block!important;
-  white-space:nowrap!important;
-  overflow:visible!important;
-  text-overflow:clip!important;
-  height:auto!important;
-  min-height:0!important;
-  line-height:1.42!important;
-  font-size:11px!important;
-  font-weight:950!important;
-  letter-spacing:-.2px!important;
-  font-variant-numeric:tabular-nums!important;
-  font-feature-settings:"tnum" 1!important;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
-}
-.metric-extra .mini .metric-up{color:#22c55e!important;-webkit-text-fill-color:#22c55e!important}
-.metric-extra .mini .metric-down{color:#38bdf8!important;-webkit-text-fill-color:#38bdf8!important}
-html.light .metric-extra .mini .metric-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light .metric-extra .mini .metric-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
-@media(max-width:520px){.metric-extra{grid-template-columns:1fr!important}.metric-extra .mini{height:auto!important;min-height:72px!important}}
-
-/* WebSocket/SSE 状态灯：兼容 title-chip 和 neon-live-chip 两种结构 */
-.title-chip[data-neon-live], .neon-live-chip[data-neon-live]{
-  position:relative!important;
-  display:inline-flex!important;
-  align-items:center!important;
-  gap:8px!important;
-  padding:5px 11px!important;
-  border-radius:999px!important;
-  font-weight:1000!important;
-}
-.title-chip[data-neon-live]::before, .neon-live-chip[data-neon-live]::before{
-  content:""!important;
-  display:inline-block!important;
-  width:11px!important;
-  height:11px!important;
-  border-radius:50%!important;
-  flex:0 0 11px!important;
-  background:#fbbf24!important;
-  box-shadow:0 0 12px rgba(251,191,36,.95),0 0 24px rgba(251,191,36,.42)!important;
-  animation:liveLampAmber 1.55s ease-in-out infinite!important;
-}
-.title-chip[data-neon-live].is-live::before, .neon-live-chip[data-neon-live].is-live::before{
-  background:#22c55e!important;
-  box-shadow:0 0 12px rgba(34,197,94,1),0 0 28px rgba(34,197,94,.50)!important;
-  animation:liveLampGreen 1.45s ease-in-out infinite!important;
-}
-.title-chip[data-neon-live].is-sse::before, .neon-live-chip[data-neon-live].is-sse::before{
-  background:#facc15!important;
-  box-shadow:0 0 12px rgba(250,204,21,1),0 0 28px rgba(250,204,21,.50)!important;
-  animation:liveLampAmber 1.45s ease-in-out infinite!important;
-}
-.title-chip[data-neon-live].is-poll::before,
-.title-chip[data-neon-live].is-down::before,
-.neon-live-chip[data-neon-live].is-poll::before,
-.neon-live-chip[data-neon-live].is-down::before{
-  background:#ef4444!important;
-  box-shadow:0 0 12px rgba(239,68,68,1),0 0 28px rgba(239,68,68,.52)!important;
-  animation:liveLampRed 1.45s ease-in-out infinite!important;
-}
-.title-chip[data-neon-live].is-connecting::before, .neon-live-chip[data-neon-live].is-connecting::before{
-  background:#f59e0b!important;
-  box-shadow:0 0 12px rgba(245,158,11,1),0 0 28px rgba(245,158,11,.48)!important;
-  animation:liveLampAmber 1.45s ease-in-out infinite!important;
-}
-@keyframes liveLampGreen{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.12);opacity:.96}}
-@keyframes liveLampAmber{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.10);opacity:.96}}
-@keyframes liveLampRed{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.10);opacity:.96}}
-/* ===== end metric display and live lamp final patch ===== */
-"""
-
-_METRIC_DISPLAY_FIX_JS = r"""
-<script>
-(function(){
-  function setLiveChipState(state, text){
-    var chip=document.querySelector('[data-neon-live]');
-    if(!chip) return;
-    if(text) chip.textContent=text;
-    chip.classList.remove('is-live','is-sse','is-poll','is-down','is-connecting');
-    chip.classList.add(state||'is-connecting');
-  }
-  function syncByText(){
-    var chip=document.querySelector('[data-neon-live]');
-    if(!chip) return;
-    var t=(chip.textContent||'').trim();
-    if(/WebSocket/i.test(t)) setLiveChipState('is-live');
-    else if(/\bSSE\b/i.test(t)) setLiveChipState('is-sse');
-    else if(/轮询|回退|失败|断开|错误/i.test(t)) setLiveChipState('is-poll');
-    else setLiveChipState('is-connecting');
-  }
-  window.neonSetLiveChipState=setLiveChipState;
-  document.addEventListener('DOMContentLoaded',function(){
-    setLiveChipState('is-connecting');
-    var chip=document.querySelector('[data-neon-live]');
-    if(chip){
-      try{ new MutationObserver(syncByText).observe(chip,{childList:true,characterData:true,subtree:true}); }catch(e){}
-      syncByText();
-    }
-  });
-})();
-</script>
-"""
-
-_METRIC_DISPLAY_WS_JS = r"""
-<script>
-(function(){
-  function patchChip(){
-    if(!window.neonSetLiveChipState) return;
-    var oldApply = window.neonApplyPacket;
-    if(oldApply && !oldApply.__lampPatched){
-      window.neonApplyPacket = function(j){
-        window.neonSetLiveChipState('is-live','WebSocket/SSE 0刷新已连接');
-        return oldApply(j);
-      };
-      window.neonApplyPacket.__lampPatched = true;
-    }
-  }
-  document.addEventListener('DOMContentLoaded',function(){
-    patchChip();
-    setTimeout(patchChip,800);
-    setTimeout(patchChip,1600);
-  });
-})();
-</script>
-"""
-
-def _apply_metric_display_fix_patch():
-    global BASE
-    if 'metric display and live lamp final patch' not in BASE:
-        BASE = BASE.replace('</style><script>', _METRIC_DISPLAY_FIX_CSS + '</style><script>')
-    if 'neonSetLiveChipState' not in BASE:
-        BASE = BASE.replace('</script></head><body>', '</script>' + _METRIC_DISPLAY_FIX_JS + _METRIC_DISPLAY_WS_JS + '</head><body>')
-
-_apply_metric_display_fix_patch()
-# ===== END FINAL METRIC DISPLAY PATCH =====
-
-
-# ===== USER PATCH: horizontal colored metrics without boxes + visible live lamp =====
-def _fmt_metric_unit_inline(n, suffix=''):
+# ===== FINAL CLEAN PATCH: inline metrics, no inner boxes, compact Komari card, animated radar =====
+def _fmt_inline_bytes(n, suffix=''):
     try:
         n = float(n or 0)
     except Exception:
@@ -3175,13 +2975,13 @@ def _fmt_metric_unit_inline(n, suffix=''):
         s = f'{n:.2f} {units[i]}'
     return s + suffix
 
-def _metric_inline_up_down(up_value, down_value, suffix=''):
+def _inline_up_down(up_value, down_value, suffix=''):
     return (
-        f'<span class="m-up">↑ {_fmt_metric_unit_inline(up_value, suffix)}</span>'
-        f'<span class="m-down">↓ {_fmt_metric_unit_inline(down_value, suffix)}</span>'
+        f'<span class="m-up">↑ {_fmt_inline_bytes(up_value, suffix)}</span>'
+        f'<span class="m-down">↓ {_fmt_inline_bytes(down_value, suffix)}</span>'
     )
 
-def _metric_inline_load(load1, load5, load15):
+def _inline_load(load1, load5, load15):
     try: l1 = float(load1 or 0)
     except Exception: l1 = 0.0
     try: l5 = float(load5 or 0)
@@ -3190,287 +2990,36 @@ def _metric_inline_load(load1, load5, load15):
     except Exception: l15 = 0.0
     return f'<span class="m-load">{l1:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l5:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l15:.2f}</span>'
 
-def _metric_state_html(v):
-    txt = str(v or '未上报')
-    cls = 'm-warn' if ('未上报' in txt or '未检测' in txt or '未知' in txt) else 'm-ok'
-    return f'<span class="{cls}">{html.escape(txt)}</span>'
+def _inline_state(v):
+    raw = str(v or '未上报').strip()
+    cls = 'm-warn' if ('未上报' in raw or '未检测' in raw or '未知' in raw or raw == '无') else 'm-ok'
+    return f'<span class="{cls}">{html.escape(raw)}</span>'
 
-_PREV_METRIC_JSON_FOR_HORIZONTAL = metric_json
+_PREV_METRIC_JSON_FINAL_INLINE = metric_json
 def metric_json(x):
-    j = _PREV_METRIC_JSON_FOR_HORIZONTAL(x)
-    j['net_speed_html'] = _metric_inline_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
-    j['traffic_html'] = _metric_inline_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
-    j['load_html'] = _metric_inline_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
-    # GPU / IO / TCP 保留原取数，只给状态加颜色外壳。
-    for key in ('gpu_html', 'io_html', 'tcp_html'):
-        j[key] = _metric_state_html(j.get(key) or '未上报')
+    j = _PREV_METRIC_JSON_FINAL_INLINE(x)
+    j['net_speed_html'] = _inline_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
+    j['traffic_html'] = _inline_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
+    j['load_html'] = _inline_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
+    for k in ('gpu_html', 'io_html', 'tcp_html'):
+        j[k] = _inline_state(j.get(k) or '未上报')
     return j
 
-_PREV_LOCAL_LIVE_JSON_FOR_HORIZONTAL = _local_live_json
+_PREV_LOCAL_JSON_FINAL_INLINE = _local_live_json
 def _local_live_json():
-    j = _PREV_LOCAL_LIVE_JSON_FOR_HORIZONTAL()
-    j['net_speed_html'] = _metric_inline_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
-    j['traffic_html'] = _metric_inline_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
-    j['load_html'] = _metric_inline_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
-    for key in ('gpu_html', 'io_html', 'tcp_html'):
-        j[key] = _metric_state_html(j.get(key) or '未上报')
+    j = _PREV_LOCAL_JSON_FINAL_INLINE()
+    j['net_speed_html'] = _inline_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
+    j['traffic_html'] = _inline_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
+    j['load_html'] = _inline_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
+    for k in ('gpu_html', 'io_html', 'tcp_html'):
+        j[k] = _inline_state(j.get(k) or '未上报')
     return j
 
-_HORIZONTAL_METRICS_CSS = r"""
-/* ===== horizontal colored metrics no-box patch ===== */
-.metric-extra{
-  display:block!important;
-  margin-top:8px!important;
-  padding:0!important;
-  background:transparent!important;
-  border:0!important;
-  box-shadow:none!important;
-}
-.metric-extra .mini{
-  display:grid!important;
-  grid-template-columns:52px minmax(0,1fr)!important;
-  align-items:center!important;
-  gap:10px!important;
-  min-width:0!important;
-  width:100%!important;
-  min-height:0!important;
-  height:auto!important;
-  padding:3px 0!important;
-  margin:0!important;
-  border:0!important;
-  border-radius:0!important;
-  background:transparent!important;
-  box-shadow:none!important;
-  overflow:visible!important;
-}
-.metric-extra .mini b{
-  margin:0!important;
-  padding:0!important;
-  display:block!important;
-  color:#f8fbff!important;
-  -webkit-text-fill-color:#f8fbff!important;
-  font-size:12px!important;
-  font-weight:1000!important;
-  line-height:1.25!important;
-  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
-}
-.metric-extra .mini > span{
-  display:block!important;
-  min-width:0!important;
-  width:100%!important;
-  height:auto!important;
-  min-height:0!important;
-  white-space:nowrap!important;
-  overflow:hidden!important;
-  text-overflow:clip!important;
-  line-height:1.28!important;
-  font-size:11.5px!important;
-  font-weight:950!important;
-  letter-spacing:-.35px!important;
-  font-variant-numeric:tabular-nums!important;
-  font-feature-settings:"tnum" 1!important;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
-  color:#eaf7ff!important;
-  -webkit-text-fill-color:#eaf7ff!important;
-  text-shadow:0 1px 2px rgba(0,0,0,.45)!important;
-}
-.metric-extra .mini .m-up{color:#34d399!important;-webkit-text-fill-color:#34d399!important;margin-right:8px!important}
-.metric-extra .mini .m-down{color:#38bdf8!important;-webkit-text-fill-color:#38bdf8!important}
-.metric-extra .mini .m-load{color:#a78bfa!important;-webkit-text-fill-color:#a78bfa!important}
-.metric-extra .mini .m-sep{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
-.metric-extra .mini .m-ok{color:#34d399!important;-webkit-text-fill-color:#34d399!important}
-.metric-extra .mini .m-warn{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
-.metric-extra .ai-mini{
-  grid-template-columns:92px minmax(0,1fr)!important;
-  margin-top:3px!important;
-  padding-top:4px!important;
-  border-top:1px solid rgba(255,255,255,.12)!important;
-}
-.metric-extra .ai-mini > span,
-[data-ai],[data-local-ai]{
-  color:#f0abfc!important;
-  -webkit-text-fill-color:#f0abfc!important;
-  white-space:normal!important;
-  overflow:visible!important;
-  line-height:1.38!important;
-  font-size:11.5px!important;
-  font-weight:950!important;
-  text-shadow:0 1px 2px rgba(0,0,0,.42)!important;
-}
-html.light .metric-extra .mini b{
-  color:#0f172a!important;
-  -webkit-text-fill-color:#0f172a!important;
-  text-shadow:none!important;
-}
-html.light .metric-extra .mini > span{
-  color:#1e293b!important;
-  -webkit-text-fill-color:#1e293b!important;
-  text-shadow:none!important;
-}
-html.light .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
-html.light .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
-html.light .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
-html.light .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
-html.light .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
-html.light .metric-extra .ai-mini > span,
-html.light [data-ai],html.light [data-local-ai]{
-  color:#7e22ce!important;
-  -webkit-text-fill-color:#7e22ce!important;
-  text-shadow:none!important;
-}
-
-/* 0刷新状态灯：直接插入真实元素，不再只依赖伪元素 */
-[data-neon-live]{
-  display:inline-flex!important;
-  align-items:center!important;
-  gap:8px!important;
-}
-[data-neon-live] .live-lamp{
-  width:11px!important;
-  height:11px!important;
-  min-width:11px!important;
-  min-height:11px!important;
-  border-radius:999px!important;
-  display:inline-block!important;
-  background:#f59e0b!important;
-  box-shadow:0 0 10px rgba(245,158,11,.95),0 0 22px rgba(245,158,11,.38)!important;
-  animation:liveLampRealAmber 1.45s ease-in-out infinite!important;
-}
-[data-neon-live].is-live .live-lamp{
-  background:#22c55e!important;
-  box-shadow:0 0 10px rgba(34,197,94,1),0 0 24px rgba(34,197,94,.48)!important;
-  animation:liveLampRealGreen 1.45s ease-in-out infinite!important;
-}
-[data-neon-live].is-sse .live-lamp{
-  background:#facc15!important;
-  box-shadow:0 0 10px rgba(250,204,21,1),0 0 24px rgba(250,204,21,.48)!important;
-  animation:liveLampRealAmber 1.45s ease-in-out infinite!important;
-}
-[data-neon-live].is-poll .live-lamp,
-[data-neon-live].is-down .live-lamp{
-  background:#ef4444!important;
-  box-shadow:0 0 10px rgba(239,68,68,1),0 0 24px rgba(239,68,68,.50)!important;
-  animation:liveLampRealRed 1.45s ease-in-out infinite!important;
-}
-@keyframes liveLampRealGreen{0%,100%{transform:scale(1)}50%{transform:scale(1.13)}}
-@keyframes liveLampRealAmber{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
-@keyframes liveLampRealRed{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
-@media(max-width:520px){
-  .metric-extra .mini{grid-template-columns:48px minmax(0,1fr)!important}
-  .metric-extra .ai-mini{grid-template-columns:82px minmax(0,1fr)!important}
-  .metric-extra .mini > span{font-size:10.5px!important}
-}
-/* ===== end horizontal colored metrics no-box patch ===== */
-"""
-
-_HORIZONTAL_METRICS_JS = r"""
-<script>
-(function(){
-  function normalizeMetricHtml(){
-    document.querySelectorAll('.metric-extra .mini > span').forEach(function(el){
-      if(el.querySelector('.m-up,.m-down,.m-load,.m-ok,.m-warn')) return;
-      var txt=(el.textContent||'').trim();
-      if(!txt) return;
-      if(/未上报|未检测|未知/.test(txt)){
-        el.innerHTML='<span class="m-warn">'+txt.replace(/[<>&]/g,function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];})+'</span>';
-      }
-    });
-  }
-  function chipStateFromText(t){
-    if(/WebSocket/i.test(t||'')) return 'is-live';
-    if(/\bSSE\b/i.test(t||'')) return 'is-sse';
-    if(/轮询|回退|失败|断开|错误/i.test(t||'')) return 'is-poll';
-    return 'is-connecting';
-  }
-  function ensureLiveLamp(){
-    var chip=document.querySelector('[data-neon-live]');
-    if(!chip) return;
-    if(!chip.querySelector('.live-lamp')){
-      var lamp=document.createElement('span');
-      lamp.className='live-lamp';
-      chip.insertBefore(lamp, chip.firstChild);
-    }
-    var text=(chip.textContent||'').replace(/\s+/g,' ').trim();
-    chip.classList.remove('is-live','is-sse','is-poll','is-down','is-connecting');
-    chip.classList.add(chipStateFromText(text));
-  }
-  document.addEventListener('DOMContentLoaded',function(){
-    normalizeMetricHtml();
-    ensureLiveLamp();
-    var chip=document.querySelector('[data-neon-live]');
-    if(chip){
-      try{new MutationObserver(ensureLiveLamp).observe(chip,{childList:true,characterData:true,subtree:true});}catch(e){}
-    }
-    setInterval(function(){normalizeMetricHtml();ensureLiveLamp();},1500);
-  });
-})();
-</script>
-"""
-
-def _apply_horizontal_metrics_patch():
-    global BASE
-    if 'horizontal colored metrics no-box patch' not in BASE:
-        BASE = BASE.replace('</style><script>', _HORIZONTAL_METRICS_CSS + '</style><script>')
-    if 'normalizeMetricHtml' not in BASE:
-        BASE = BASE.replace('</script></head><body>', '</script>' + _HORIZONTAL_METRICS_JS + '</head><body>')
-
-_apply_horizontal_metrics_patch()
-# ===== END USER PATCH =====
-
-
-# ===== USER PATCH: clean transparent metric rows, horizontal data, do not touch live lamp =====
-def _fmt_metric_unit_clean(n, suffix=''):
-    try:
-        n = float(n or 0)
-    except Exception:
-        return '0 B' + suffix
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-    i = 0
-    while abs(n) >= 1024 and i < len(units) - 1:
-        n /= 1024.0
-        i += 1
-    if i == 0:
-        s = f'{n:.0f} {units[i]}'
-    else:
-        s = f'{n:.2f} {units[i]}'
-    return s + suffix
-
-def _metric_clean_up_down(up_value, down_value, suffix=''):
-    return (
-        f'<span class="m-up">↑ {_fmt_metric_unit_clean(up_value, suffix)}</span>'
-        f'<span class="m-down">↓ {_fmt_metric_unit_clean(down_value, suffix)}</span>'
-    )
-
-def _metric_clean_load(load1, load5, load15):
-    try: l1 = float(load1 or 0)
-    except Exception: l1 = 0.0
-    try: l5 = float(load5 or 0)
-    except Exception: l5 = 0.0
-    try: l15 = float(load15 or 0)
-    except Exception: l15 = 0.0
-    return f'<span class="m-load">{l1:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l5:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l15:.2f}</span>'
-
-_PREV_METRIC_JSON_FOR_CLEAN_ROWS = metric_json
-def metric_json(x):
-    j = _PREV_METRIC_JSON_FOR_CLEAN_ROWS(x)
-    j['net_speed_html'] = _metric_clean_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
-    j['traffic_html'] = _metric_clean_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
-    j['load_html'] = _metric_clean_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
-    return j
-
-_PREV_LOCAL_LIVE_JSON_FOR_CLEAN_ROWS = _local_live_json
-def _local_live_json():
-    j = _PREV_LOCAL_LIVE_JSON_FOR_CLEAN_ROWS()
-    j['net_speed_html'] = _metric_clean_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
-    j['traffic_html'] = _metric_clean_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
-    j['load_html'] = _metric_clean_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
-    return j
-
-_CLEAN_METRIC_ROWS_CSS = r"""
-/* ===== clean transparent metric rows; no extra boxes ===== */
-.metric-extra{
+_FINAL_INLINE_CLEAN_CSS = r"""
+/* ===== final inline metrics: left label + right data, transparent only ===== */
+html body .servercard .metric-extra,
+html body .card .metric-extra,
+html body .metric-extra{
   display:block!important;
   margin:8px 0 0!important;
   padding:0!important;
@@ -3481,155 +3030,20 @@ _CLEAN_METRIC_ROWS_CSS = r"""
   box-shadow:none!important;
   overflow:visible!important;
 }
-.metric-extra .mini{
-  display:block!important;
-  width:100%!important;
-  min-width:0!important;
-  min-height:0!important;
-  height:auto!important;
-  margin:0 0 7px!important;
-  padding:0!important;
-  border:0!important;
-  border-radius:0!important;
-  background:transparent!important;
-  background-color:transparent!important;
-  box-shadow:none!important;
-  overflow:visible!important;
-}
-.metric-extra .mini b{
-  display:block!important;
-  width:100%!important;
-  margin:0 0 2px!important;
-  padding:0!important;
-  border:0!important;
-  background:transparent!important;
-  color:#f8fbff!important;
-  -webkit-text-fill-color:#f8fbff!important;
-  font-size:12px!important;
-  line-height:1.25!important;
-  font-weight:1000!important;
-  text-shadow:0 1px 3px rgba(0,0,0,.65)!important;
-}
-.metric-extra .mini > span{
-  display:block!important;
-  width:100%!important;
-  min-width:0!important;
-  height:auto!important;
-  min-height:0!important;
-  margin:0!important;
-  padding:0!important;
-  white-space:nowrap!important;
-  overflow:visible!important;
-  text-overflow:clip!important;
-  line-height:1.35!important;
-  font-size:11px!important;
-  font-weight:950!important;
-  letter-spacing:-.35px!important;
-  font-variant-numeric:tabular-nums!important;
-  font-feature-settings:"tnum" 1!important;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
-  background:transparent!important;
-  box-shadow:none!important;
-}
-.metric-extra .mini .m-up{
-  display:inline!important;
-  color:#34d399!important;
-  -webkit-text-fill-color:#34d399!important;
-  margin-right:12px!important;
-}
-.metric-extra .mini .m-down{
-  display:inline!important;
-  color:#38bdf8!important;
-  -webkit-text-fill-color:#38bdf8!important;
-}
-.metric-extra .mini .m-load{
-  display:inline!important;
-  color:#a78bfa!important;
-  -webkit-text-fill-color:#a78bfa!important;
-}
-.metric-extra .mini .m-sep{
-  display:inline!important;
-  color:#fbbf24!important;
-  -webkit-text-fill-color:#fbbf24!important;
-}
-.metric-extra .mini .m-ok{
-  color:#34d399!important;
-  -webkit-text-fill-color:#34d399!important;
-}
-.metric-extra .mini .m-warn{
-  color:#fbbf24!important;
-  -webkit-text-fill-color:#fbbf24!important;
-}
-.metric-extra .ai-mini{
-  margin-top:8px!important;
-  padding-top:7px!important;
-  border-top:1px solid rgba(255,255,255,.16)!important;
-}
-.metric-extra .ai-mini > span,
-[data-ai],[data-local-ai]{
-  white-space:normal!important;
-  overflow:visible!important;
-  line-height:1.38!important;
-  font-size:11.5px!important;
-  font-weight:950!important;
-  color:#f0abfc!important;
-  -webkit-text-fill-color:#f0abfc!important;
-  text-shadow:0 1px 2px rgba(0,0,0,.42)!important;
-}
-html.light .metric-extra .mini b{
-  color:#0f172a!important;
-  -webkit-text-fill-color:#0f172a!important;
-  text-shadow:none!important;
-}
-html.light .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
-html.light .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
-html.light .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
-html.light .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
-html.light .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
-html.light .metric-extra .ai-mini > span,
-html.light [data-ai],html.light [data-local-ai]{
-  color:#7e22ce!important;
-  -webkit-text-fill-color:#7e22ce!important;
-  text-shadow:none!important;
-}
-@media(max-width:420px){
-  .metric-extra .mini > span{font-size:10.5px!important;letter-spacing:-.55px!important}
-  .metric-extra .mini .m-up{margin-right:8px!important}
-}
-/* ===== end clean transparent metric rows ===== */
-"""
-
-def _apply_clean_metric_rows_patch():
-    global BASE
-    if 'clean transparent metric rows' not in BASE:
-        BASE = BASE.replace('</style><script>', _CLEAN_METRIC_ROWS_CSS + '</style><script>')
-
-_apply_clean_metric_rows_patch()
-# ===== END USER PATCH =====
-
-
-# ===== USER PATCH: metric rows inline left-right, transparent background only =====
-_INLINE_METRIC_ROWS_CSS = r"""
-/* ===== metric rows inline left-right, no inner background ===== */
-.metric-extra{
-  display:block!important;
-  margin:8px 0 0!important;
-  padding:0!important;
-  border:0!important;
-  border-radius:0!important;
-  background:transparent!important;
-  background-color:transparent!important;
-  box-shadow:none!important;
-  overflow:visible!important;
-}
-.metric-extra .mini{
+html body .servercard .metric-extra .mini,
+html body .card .metric-extra .mini,
+html body .metric-extra .mini,
+html body .metric-extra .mini:nth-child(1),
+html body .metric-extra .mini:nth-child(2),
+html body .metric-extra .mini:nth-child(3),
+html body .metric-extra .mini:nth-child(4),
+html body .metric-extra .mini:nth-child(5),
+html body .metric-extra .mini:nth-child(6),
+html body .metric-extra .mini:nth-child(7){
   display:grid!important;
-  grid-template-columns:52px minmax(0,1fr)!important;
+  grid-template-columns:48px minmax(0,1fr)!important;
   align-items:center!important;
-  column-gap:10px!important;
-  row-gap:0!important;
+  column-gap:8px!important;
   width:100%!important;
   min-width:0!important;
   min-height:0!important;
@@ -3642,11 +3056,11 @@ _INLINE_METRIC_ROWS_CSS = r"""
   background-color:transparent!important;
   box-shadow:none!important;
   overflow:visible!important;
+  text-shadow:none!important;
 }
-.metric-extra .mini b{
+html body .metric-extra .mini b{
   grid-column:1!important;
   display:block!important;
-  width:auto!important;
   margin:0!important;
   padding:0!important;
   border:0!important;
@@ -3654,114 +3068,131 @@ _INLINE_METRIC_ROWS_CSS = r"""
   color:#f8fbff!important;
   -webkit-text-fill-color:#f8fbff!important;
   font-size:12px!important;
-  line-height:1.28!important;
+  line-height:1.25!important;
   font-weight:1000!important;
   white-space:nowrap!important;
-  text-shadow:0 1px 3px rgba(0,0,0,.65)!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
 }
-.metric-extra .mini > span{
+html body .metric-extra .mini > span{
   grid-column:2!important;
   display:block!important;
   width:100%!important;
   min-width:0!important;
-  height:auto!important;
-  min-height:0!important;
   margin:0!important;
   padding:0!important;
+  height:auto!important;
+  min-height:0!important;
   white-space:nowrap!important;
   overflow:visible!important;
   text-overflow:clip!important;
   line-height:1.28!important;
-  font-size:11.2px!important;
+  font-size:10.8px!important;
   font-weight:950!important;
   letter-spacing:-.45px!important;
+  text-align:left!important;
   font-variant-numeric:tabular-nums!important;
   font-feature-settings:"tnum" 1!important;
   font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
   background:transparent!important;
   background-color:transparent!important;
   box-shadow:none!important;
-  text-align:left!important;
 }
-.metric-extra .mini .m-up{
-  display:inline!important;
-  color:#34d399!important;
-  -webkit-text-fill-color:#34d399!important;
-  margin-right:10px!important;
-}
-.metric-extra .mini .m-down{
-  display:inline!important;
-  color:#38bdf8!important;
-  -webkit-text-fill-color:#38bdf8!important;
-}
-.metric-extra .mini .m-load{
-  display:inline!important;
-  color:#a78bfa!important;
-  -webkit-text-fill-color:#a78bfa!important;
-}
-.metric-extra .mini .m-sep{
-  display:inline!important;
-  color:#fbbf24!important;
-  -webkit-text-fill-color:#fbbf24!important;
-}
-.metric-extra .mini .m-ok{
-  color:#34d399!important;
-  -webkit-text-fill-color:#34d399!important;
-}
-.metric-extra .mini .m-warn{
-  color:#fbbf24!important;
-  -webkit-text-fill-color:#fbbf24!important;
-}
-.metric-extra .ai-mini{
+html body .metric-extra .mini .m-up{display:inline!important;color:#34d399!important;-webkit-text-fill-color:#34d399!important;margin-right:8px!important}
+html body .metric-extra .mini .m-down{display:inline!important;color:#38bdf8!important;-webkit-text-fill-color:#38bdf8!important}
+html body .metric-extra .mini .m-load{display:inline!important;color:#a78bfa!important;-webkit-text-fill-color:#a78bfa!important}
+html body .metric-extra .mini .m-sep{display:inline!important;color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+html body .metric-extra .mini .m-ok{color:#34d399!important;-webkit-text-fill-color:#34d399!important}
+html body .metric-extra .mini .m-warn{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+html body .metric-extra .ai-mini{
   grid-template-columns:86px minmax(0,1fr)!important;
   margin-top:7px!important;
   padding-top:6px!important;
-  border-top:1px solid rgba(255,255,255,.16)!important;
+  border-top:1px solid rgba(255,255,255,.14)!important;
 }
-.metric-extra .ai-mini > span,
-[data-ai],[data-local-ai]{
+html body .metric-extra .ai-mini > span,
+html body [data-ai],
+html body [data-local-ai]{
   white-space:normal!important;
   overflow:visible!important;
-  line-height:1.35!important;
-  font-size:11.2px!important;
+  line-height:1.34!important;
+  font-size:11px!important;
   font-weight:950!important;
-  color:#f0abfc!important;
-  -webkit-text-fill-color:#f0abfc!important;
-  text-shadow:0 1px 2px rgba(0,0,0,.42)!important;
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  text-shadow:none!important;
 }
-html.light .metric-extra .mini b{
+html.light body .metric-extra .mini b{
   color:#0f172a!important;
   -webkit-text-fill-color:#0f172a!important;
   text-shadow:none!important;
 }
-html.light .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
-html.light .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
-html.light .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
-html.light .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
-html.light .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
-html.light .metric-extra .ai-mini > span,
-html.light [data-ai],html.light [data-local-ai]{
-  color:#7e22ce!important;
-  -webkit-text-fill-color:#7e22ce!important;
-  text-shadow:none!important;
+html.light body .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light body .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
+html.light body .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
+html.light body .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
+html.light body .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light body .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
+html.light body .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
+
+/* Komari 能力卡片缩小 */
+html body .feature-card{
+  min-height:auto!important;
+  margin-top:8px!important;
+  padding:10px 12px!important;
 }
+html body .feature-card h2{
+  font-size:15px!important;
+  margin:0 0 7px!important;
+}
+html body .feature-grid{
+  grid-template-columns:repeat(auto-fit,minmax(130px,1fr))!important;
+  gap:6px!important;
+}
+html body .feature-grid span{
+  padding:6px 8px!important;
+  border-radius:10px!important;
+  font-size:11px!important;
+  line-height:1.25!important;
+}
+
+/* 运维雷达圆圈扫描动画 */
+html body .radar{
+  position:relative!important;
+  overflow:hidden!important;
+  animation:radarBreathRun 2.4s ease-in-out infinite!important;
+}
+html body .radar::after{
+  content:""!important;
+  position:absolute!important;
+  inset:6px!important;
+  border-radius:50%!important;
+  background:conic-gradient(from 0deg,rgba(34,211,238,0) 0deg,rgba(34,211,238,0) 270deg,rgba(34,211,238,.26) 312deg,rgba(134,239,172,.62) 354deg,rgba(34,211,238,0) 360deg)!important;
+  animation:radarSweepRun 1.8s linear infinite!important;
+  mix-blend-mode:screen!important;
+  pointer-events:none!important;
+}
+html body .radar span{position:relative!important;z-index:2!important}
+@keyframes radarSweepRun{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes radarBreathRun{0%,100%{filter:brightness(1)}50%{filter:brightness(1.18)}}
+
 @media(max-width:420px){
-  .metric-extra .mini{grid-template-columns:44px minmax(0,1fr)!important;column-gap:7px!important}
-  .metric-extra .ai-mini{grid-template-columns:74px minmax(0,1fr)!important}
-  .metric-extra .mini > span{font-size:10px!important;letter-spacing:-.65px!important}
-  .metric-extra .mini .m-up{margin-right:6px!important}
+  html body .metric-extra .mini{grid-template-columns:42px minmax(0,1fr)!important;column-gap:6px!important}
+  html body .metric-extra .ai-mini{grid-template-columns:74px minmax(0,1fr)!important}
+  html body .metric-extra .mini > span{font-size:10px!important;letter-spacing:-.65px!important}
+  html body .metric-extra .mini .m-up{margin-right:5px!important}
 }
-/* ===== end metric rows inline left-right, no inner background ===== */
+/* ===== end final inline metrics ===== */
 """
 
-def _apply_inline_metric_rows_patch():
+def _apply_final_inline_clean_patch():
     global BASE
-    if 'metric rows inline left-right, no inner background' not in BASE:
-        BASE = BASE.replace('</style><script>', _INLINE_METRIC_ROWS_CSS + '</style><script>')
+    if 'final inline metrics: left label + right data' not in BASE:
+        BASE = BASE.replace('</style><script>', _FINAL_INLINE_CLEAN_CSS + '</style><script>')
 
-_apply_inline_metric_rows_patch()
-# ===== END USER PATCH =====
+_apply_final_inline_clean_patch()
+# ===== END FINAL CLEAN PATCH =====
 
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
