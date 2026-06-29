@@ -3442,4 +3442,339 @@ def _apply_ai_map_theme_patch():
 _apply_ai_map_theme_patch()
 # ===== END USER PATCH =====
 
+
+# ===== FINAL USER VISUAL FIX: remove metric strips, clearer themed map/radar, richer ops radar =====
+_FINAL_VISUAL_FIX_CSS = r"""
+/* ===== final visual fix: no metric strips + clear themed map/radar ===== */
+
+/* 彻底去掉网络/流量/负载/GPU/IO/TCP 的条状背景，只保留服务器卡片自身背景 */
+html body .servercard .metric-extra,
+html body .servercard .metric-extra *,
+html body .card .metric-extra,
+html body .card .metric-extra *,
+html body .metric-extra,
+html body .metric-extra *{
+  box-shadow:none!important;
+}
+
+html body .servercard .metric-extra,
+html body .card .metric-extra,
+html body .metric-extra{
+  display:block!important;
+  margin:8px 0 0!important;
+  padding:0!important;
+  border:0!important;
+  outline:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  overflow:visible!important;
+}
+
+html body .servercard .metric-extra div.mini,
+html body .servercard .metric-extra div.mini:nth-child(1),
+html body .servercard .metric-extra div.mini:nth-child(2),
+html body .servercard .metric-extra div.mini:nth-child(3),
+html body .servercard .metric-extra div.mini:nth-child(4),
+html body .servercard .metric-extra div.mini:nth-child(5),
+html body .servercard .metric-extra div.mini:nth-child(6),
+html body .card .metric-extra div.mini,
+html body .card .metric-extra div.mini:nth-child(1),
+html body .card .metric-extra div.mini:nth-child(2),
+html body .card .metric-extra div.mini:nth-child(3),
+html body .card .metric-extra div.mini:nth-child(4),
+html body .card .metric-extra div.mini:nth-child(5),
+html body .card .metric-extra div.mini:nth-child(6),
+html body div.metric-extra > div.mini:not(.ai-mini){
+  display:grid!important;
+  grid-template-columns:48px minmax(0,1fr)!important;
+  align-items:center!important;
+  column-gap:9px!important;
+  width:100%!important;
+  min-width:0!important;
+  min-height:0!important;
+  height:auto!important;
+  margin:0 0 6px!important;
+  padding:0!important;
+  border:0!important;
+  outline:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  overflow:visible!important;
+}
+
+html body .metric-extra > .mini:not(.ai-mini)::before,
+html body .metric-extra > .mini:not(.ai-mini)::after,
+html body .metric-extra > .mini:not(.ai-mini) > span::before,
+html body .metric-extra > .mini:not(.ai-mini) > span::after{
+  content:none!important;
+  display:none!important;
+  background:transparent!important;
+  background-image:none!important;
+}
+
+html body .metric-extra > .mini:not(.ai-mini) b{
+  grid-column:1!important;
+  display:block!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  border:0!important;
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+  font-size:12px!important;
+  line-height:1.25!important;
+  font-weight:1000!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.72)!important;
+}
+
+html body .metric-extra > .mini:not(.ai-mini) > span{
+  grid-column:2!important;
+  display:block!important;
+  min-width:0!important;
+  width:100%!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  border:0!important;
+  font-size:11px!important;
+  line-height:1.28!important;
+  font-weight:950!important;
+  letter-spacing:-.45px!important;
+  font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum" 1!important;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
+}
+
+html body .metric-extra .mini .m-up{display:inline!important;color:#34d399!important;-webkit-text-fill-color:#34d399!important;margin-right:8px!important}
+html body .metric-extra .mini .m-down{display:inline!important;color:#38bdf8!important;-webkit-text-fill-color:#38bdf8!important}
+html body .metric-extra .mini .m-load{display:inline!important;color:#a78bfa!important;-webkit-text-fill-color:#a78bfa!important}
+html body .metric-extra .mini .m-sep{display:inline!important;color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+html body .metric-extra .mini .m-ok{color:#34d399!important;-webkit-text-fill-color:#34d399!important}
+html body .metric-extra .mini .m-warn{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+
+html.light body .metric-extra > .mini:not(.ai-mini) b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light body .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light body .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
+html.light body .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
+html.light body .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
+html.light body .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light body .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
+
+/* AI 保持独立透明卡片，上标题下内容 */
+html body .metric-extra .ai-mini{
+  display:block!important;
+  width:100%!important;
+  margin:10px 0 0!important;
+  padding:9px 10px!important;
+  border-radius:14px!important;
+  border:1px solid rgba(125,211,252,.22)!important;
+  background:linear-gradient(135deg,rgba(34,211,238,.12),rgba(96,165,250,.08),rgba(52,211,153,.08))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 8px 24px rgba(14,165,233,.08)!important;
+  overflow:visible!important;
+}
+html body .metric-extra .ai-mini b{
+  display:block!important;
+  margin:0 0 5px!important;
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+  font-size:12px!important;
+  line-height:1.25!important;
+  font-weight:1000!important;
+  white-space:nowrap!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
+}
+html body .metric-extra .ai-mini > span,
+html body [data-ai],
+html body [data-local-ai]{
+  display:block!important;
+  width:100%!important;
+  white-space:normal!important;
+  word-break:break-word!important;
+  overflow:visible!important;
+  line-height:1.45!important;
+  font-size:11.5px!important;
+  letter-spacing:0!important;
+  font-weight:950!important;
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  text-shadow:none!important;
+}
+html.light body .metric-extra .ai-mini{
+  border-color:rgba(37,99,235,.16)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.54),rgba(219,234,254,.42),rgba(240,253,250,.34))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.72),0 8px 22px rgba(37,99,235,.08)!important;
+}
+html.light body .metric-extra .ai-mini b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light body .metric-extra .ai-mini > span,
+html.light body [data-ai],
+html.light body [data-local-ai]{
+  background:linear-gradient(90deg,#0369a1,#2563eb,#7c3aed,#059669)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  -webkit-text-fill-color:transparent!important;
+}
+
+/* 日间/实色下地图和雷达不再发黑，改成高对比彩色玻璃 */
+html body .world-radar,
+html body .topology-map{
+  background:
+    radial-gradient(circle at 73% 43%,rgba(34,197,94,.18),transparent 13%),
+    radial-gradient(circle at 30% 35%,rgba(56,189,248,.14),transparent 36%),
+    linear-gradient(135deg,rgba(15,23,42,.34),rgba(30,64,175,.24),rgba(14,116,144,.18))!important;
+  border-color:rgba(125,211,252,.24)!important;
+}
+html.light body .world-radar,
+html.light body .topology-map{
+  background:
+    radial-gradient(circle at 73% 43%,rgba(34,197,94,.26),transparent 13%),
+    radial-gradient(circle at 28% 36%,rgba(14,165,233,.26),transparent 38%),
+    linear-gradient(135deg,rgba(255,255,255,.82),rgba(191,219,254,.70),rgba(167,243,208,.52))!important;
+  border-color:rgba(37,99,235,.20)!important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.78),0 16px 34px rgba(37,99,235,.14)!important;
+}
+html.light.solid body .world-radar,
+body.light.solid .world-radar,
+html.light.solid body .topology-map,
+body.light.solid .topology-map{
+  background:
+    radial-gradient(circle at 73% 43%,rgba(34,197,94,.30),transparent 13%),
+    radial-gradient(circle at 28% 36%,rgba(14,165,233,.28),transparent 38%),
+    linear-gradient(135deg,#ffffff,#dbeafe,#bbf7d0)!important;
+  border-color:rgba(37,99,235,.22)!important;
+}
+
+/* 雷达图数字背景改彩色，不黑 */
+html body .radar{
+  position:relative!important;
+  background:
+    conic-gradient(#22c55e var(--risk),rgba(125,211,252,.20) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(125,211,252,.20) 22px 23px),
+    radial-gradient(circle,rgba(14,116,144,.20),rgba(30,64,175,.12))!important;
+}
+html.light body .radar{
+  background:
+    conic-gradient(#16a34a var(--risk),rgba(37,99,235,.16) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.20) 22px 23px),
+    radial-gradient(circle,rgba(236,253,245,.92),rgba(191,219,254,.74))!important;
+}
+html.light.solid body .radar,
+body.light.solid .radar{
+  background:
+    conic-gradient(#16a34a var(--risk),rgba(37,99,235,.16) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.20) 22px 23px),
+    radial-gradient(circle,#f0fdf4,#dbeafe)!important;
+}
+html body .radar span{
+  background:linear-gradient(135deg,rgba(34,211,238,.36),rgba(34,197,94,.24),rgba(96,165,250,.25))!important;
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+  text-shadow:0 1px 4px rgba(0,0,0,.50)!important;
+}
+html.light body .radar span,
+html.light.solid body .radar span,
+body.light.solid .radar span{
+  background:linear-gradient(135deg,#ecfeff,#dbeafe,#dcfce7)!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+  border:1px solid rgba(37,99,235,.16)!important;
+}
+
+/* 运维雷达卡片增加内容层次，避免大而空 */
+html body .radar-card{
+  position:relative!important;
+  overflow:hidden!important;
+}
+html body .radar-card::before{
+  content:"风险雷达 · 流量 / 连接 / 资源 / 离线"!important;
+  display:block!important;
+  margin:2px 0 8px!important;
+  padding:6px 9px!important;
+  border-radius:999px!important;
+  background:linear-gradient(90deg,rgba(34,211,238,.16),rgba(34,197,94,.12),rgba(168,85,247,.12))!important;
+  color:#eaffff!important;
+  -webkit-text-fill-color:#eaffff!important;
+  font-size:11px!important;
+  font-weight:950!important;
+  letter-spacing:.2px!important;
+}
+html.light body .radar-card::before{
+  background:linear-gradient(90deg,rgba(14,165,233,.18),rgba(34,197,94,.14),rgba(124,58,237,.12))!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+}
+html body .radar-legend{
+  grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  gap:7px!important;
+  margin-top:8px!important;
+}
+html body .radar-legend b{
+  background:linear-gradient(135deg,rgba(34,211,238,.14),rgba(96,165,250,.09))!important;
+  border:1px solid rgba(125,211,252,.16)!important;
+}
+html.light body .radar-legend b{
+  background:linear-gradient(135deg,rgba(255,255,255,.70),rgba(219,234,254,.54))!important;
+  color:#0f172a!important;
+  border-color:rgba(37,99,235,.14)!important;
+}
+/* ===== end final visual fix ===== */
+"""
+
+_FINAL_VISUAL_FIX_JS = r"""
+<script>
+(function(){
+  function clearMetricBackgrounds(){
+    document.querySelectorAll('.metric-extra,.metric-extra .mini:not(.ai-mini)').forEach(function(el){
+      el.style.setProperty('background','transparent','important');
+      el.style.setProperty('background-color','transparent','important');
+      el.style.setProperty('background-image','none','important');
+      el.style.setProperty('border','0','important');
+      el.style.setProperty('box-shadow','none','important');
+    });
+  }
+  document.addEventListener('DOMContentLoaded',function(){
+    clearMetricBackgrounds();
+    setInterval(clearMetricBackgrounds,1200);
+  });
+})();
+</script>
+"""
+
+def _apply_final_visual_fix_patch():
+    global BASE
+    if 'final visual fix: no metric strips' not in BASE:
+        BASE = BASE.replace('</style><script>', _FINAL_VISUAL_FIX_CSS + '</style><script>')
+    if 'clearMetricBackgrounds' not in BASE:
+        BASE = BASE.replace('</script></head><body>', '</script>' + _FINAL_VISUAL_FIX_JS + '</head><body>')
+
+_apply_final_visual_fix_patch()
+# ===== END FINAL USER VISUAL FIX =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
