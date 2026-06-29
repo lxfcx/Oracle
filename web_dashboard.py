@@ -4620,4 +4620,159 @@ def _local_live_json():
     return j
 # ===== END LOCAL AI ONLY =====
 
+
+# ===== USER PATCH: one view menu + table expand details + compact view =====
+_VIEW_MENU_PATCH_CSS = r"""
+/* ===== view menu + expandable table + compact view ===== */
+.view-menu{position:relative;display:inline-block}
+.view-menu-btn{display:inline-flex!important;align-items:center;gap:8px}
+.view-menu-panel{position:absolute;right:0;top:calc(100% + 8px);min-width:168px;z-index:80;display:none;padding:8px;border-radius:15px;border:1px solid rgba(255,255,255,.22);background:linear-gradient(135deg,rgba(255,255,255,.22),rgba(255,255,255,.10));backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 18px 46px rgba(15,23,42,.24),inset 0 1px 0 rgba(255,255,255,.18)}
+.view-menu.open .view-menu-panel{display:block}
+.view-menu-panel button{width:100%;display:flex!important;justify-content:flex-start!important;align-items:center!important;gap:9px!important;margin:0!important;padding:9px 10px!important;border-radius:11px!important;border:0!important;background:transparent!important;box-shadow:none!important;text-align:left!important;color:var(--text)!important}
+.view-menu-panel button:hover,.view-menu-panel button.active{background:linear-gradient(90deg,rgba(34,211,238,.18),rgba(168,85,247,.12))!important}
+html.light .view-menu-panel{background:linear-gradient(135deg,rgba(255,255,255,.92),rgba(239,246,255,.82));border-color:rgba(37,99,235,.14)}
+.table-detail-row.hidden{display:none!important}
+.table-detail-row>td{padding:0!important;background:transparent!important}
+.table-detail-card{margin:8px;padding:12px;border-radius:16px;border:1px solid rgba(255,255,255,.16);background:linear-gradient(135deg,rgba(255,255,255,.13),rgba(255,255,255,.06))}
+html.light .table-detail-card{background:linear-gradient(135deg,rgba(255,255,255,.82),rgba(239,246,255,.62));border-color:rgba(37,99,235,.12)}
+.table-detail-grid{display:grid;grid-template-columns:1.05fr 1fr;gap:10px}
+.detail-pill-line{display:flex;flex-wrap:wrap;gap:7px;margin:7px 0}
+.detail-metrics{margin-top:8px}
+.compact-list{display:grid;gap:8px}
+.compact-server{display:grid;grid-template-columns:minmax(160px,1.2fr) minmax(120px,.8fr) minmax(170px,1fr) auto;align-items:center;gap:10px;padding:10px 11px;border-radius:15px;border:1px solid rgba(255,255,255,.16);background:linear-gradient(135deg,rgba(255,255,255,.12),rgba(255,255,255,.05))}
+html.light .compact-server{background:linear-gradient(135deg,rgba(255,255,255,.82),rgba(239,246,255,.58));border-color:rgba(37,99,235,.12)}
+.compact-name{font-weight:1000;display:flex;align-items:center;gap:6px;min-width:0}
+.compact-name .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.compact-metrics{font-size:12px;font-weight:900;line-height:1.45}
+.compact-bars{min-width:0}.compact-bars .progressrow{margin:3px 0!important}
+.view-label{font-weight:1000}
+@media(max-width:980px){.compact-server{grid-template-columns:1fr;align-items:stretch}.table-detail-grid{grid-template-columns:1fr}.view-menu-panel{right:auto;left:0}}
+/* ===== end view menu + expandable table + compact view ===== */
+"""
+
+_VIEW_MENU_PATCH_JS = r"""
+<script>
+(function(){
+  function qsa(s){return Array.from(document.querySelectorAll(s));}
+  window.setView=function(v){
+    localStorage.setItem('serverView',v);
+    qsa('[data-view-table]').forEach(e=>e.classList.toggle('hidden',v!=='table'));
+    qsa('[data-view-card]').forEach(e=>e.classList.toggle('hidden',v!=='card'));
+    qsa('[data-view-compact]').forEach(e=>e.classList.toggle('hidden',v!=='compact'));
+    qsa('[data-view-choice]').forEach(e=>e.classList.toggle('active',e.getAttribute('data-view-choice')===v));
+    qsa('[data-current-view]').forEach(e=>{e.textContent=v==='table'?'表格视图':(v==='compact'?'紧凑视图':'网格视图');});
+    document.querySelectorAll('.view-menu').forEach(m=>m.classList.remove('open'));
+  };
+  window.initView=function(){setView(localStorage.getItem('serverView')||'card');};
+  window.toggleViewMenu=function(btn){let m=btn&&btn.closest?btn.closest('.view-menu'):null;if(!m)return;document.querySelectorAll('.view-menu').forEach(x=>{if(x!==m)x.classList.remove('open')});m.classList.toggle('open');};
+  window.toggleTableDetail=function(id){
+    document.querySelectorAll('[data-detail-row="'+id+'"]').forEach(e=>{e.classList.toggle('hidden');});
+    let row=document.querySelector('[data-detail-row="'+id+'"]');
+    let open=row && !row.classList.contains('hidden');
+    document.querySelectorAll('[data-detail-toggle="'+id+'"]').forEach(b=>{b.textContent=open?'收回':'展开';});
+  };
+  document.addEventListener('click',function(e){if(!e.target.closest('.view-menu'))document.querySelectorAll('.view-menu').forEach(m=>m.classList.remove('open'));});
+  document.addEventListener('DOMContentLoaded',function(){window.initView&&window.initView();});
+})();
+</script>
+"""
+
+def _view_menu_html(add_button=True, total_link=False):
+    extra = ''
+    if add_button:
+        extra += '<a class="btn primary" href="/servers/add">➕ 添加服务器</a>'
+    if total_link:
+        extra += '<a class=btn href="/">📊 总览</a>'
+    return (
+        '<div class=btns>'
+        '<div class="view-menu">'
+        '<button class="view-menu-btn" type="button" onclick="toggleViewMenu(this)">☷ <span data-current-view>网格视图</span></button>'
+        '<div class="view-menu-panel">'
+        '<button type="button" data-view-choice="card" onclick="setView(\'card\')">▦ <span class="view-label">网格视图</span></button>'
+        '<button type="button" data-view-choice="compact" onclick="setView(\'compact\')">▤ <span class="view-label">紧凑视图</span></button>'
+        '<button type="button" data-view-choice="table" onclick="setView(\'table\')">▥ <span class="view-label">表格视图</span></button>'
+        '</div></div>' + extra + '</div>'
+    )
+
+def _server_detail_html_jinja(colspan='6'):
+    return """<tr class="table-detail-row hidden" data-detail-row="{{s.id}}"><td colspan=\"""" + colspan + """\"><div class="table-detail-card">
+<div class="table-detail-grid">
+  <div>
+    <h3 class="server-title"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></h3>
+    <div class="detail-pill-line">
+      <span class=badge>ID{{s.id}}</span><span class=badge>{{s.host}}:{{s.check_port}}</span><span class=badge>{{s.location_cn or s.location}}</span><span class=badge>{{s.os_name or '未知系统'}}</span>
+      <span class="badge {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span><span class="badge {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span>
+    </div>
+    {{expire_progress_html(s)|safe}}
+    <div class=small data-hw="{{s.id}}">{{metric_config_html(m)|safe}}</div>
+    <div class="metric-extra detail-metrics">
+      <div class="mini"><b>网络</b><span data-netspeed="{{s.id}}">↑ 0B/s&nbsp;&nbsp;↓ 0B/s</span></div>
+      <div class="mini"><b>流量</b><span data-traffic="{{s.id}}">↑ 0B&nbsp;&nbsp;↓ 0B</span></div>
+      <div class="mini"><b>负载</b><span data-load="{{s.id}}">0.00 ｜ 0.00 ｜ 0.00</span></div>
+      <div class="mini"><b>GPU</b><span data-gpu="{{s.id}}">{{metric_gpu_html(m)|safe}}</span></div>
+      <div class="mini"><b>IO</b><span data-io="{{s.id}}">{{metric_io_html(m)|safe}}</span></div>
+      <div class="mini"><b>TCP</b><span data-tcp="{{s.id}}">{{metric_tcp_html(m)|safe}}</span></div>
+      <div class="ai-fault-card"><b>AI 故障判断</b><div data-ai="{{s.id}}">{{ai_fault_html(s)}}</div></div>
+    </div>
+  </div>
+  <div>
+    {{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}
+    {{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}
+    {{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}
+    {{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}
+    <hr>
+    <p class=small>📝 {{s.note or '无备注'}}<br>🏢 {{s.isp or '未知运营商'}}｜📡 数据：{{m.updated_at or '未知'}}</p>
+    <div class=btns><a class="btn primary" href="/servers/{{s.id}}">详情</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a><button type=button onclick="toggleTableDetail('{{s.id}}')">收回</button></div>
+  </div>
+</div></div></td></tr>"""
+
+def _compact_view_html():
+    return """<div data-view-compact class="hidden compact-list">{% for s in data.servers %}{% set m=s.metrics %}
+<div class="compact-server">
+  <div class="compact-name"><span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span>{{flag_icon(s)|safe}}<span class="name">{{s.name}}</span></div>
+  <div class="compact-metrics"><span data-status="{{s.id}}">{{'🟢 在线' if s.online else '🔴 离线'}}</span><br><span class="{{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span></div>
+  <div class="compact-bars">{{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}{{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}</div>
+  <div class=btns><button type=button onclick="toggleTableDetail('{{s.id}}');setView('table')">展开</button><a class=btn href="/servers/{{s.id}}">详情</a></div>
+</div>{% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>"""
+
+def _patch_table_rows(template, colspan):
+    detail = _server_detail_html_jinja(colspan)
+    if 'data-detail-row="{{s.id}}"' in template:
+        return template
+    template = template.replace(
+        '<a class=btn href="/servers/{{s.id}}">详情</a></td></tr>',
+        '<button type=button data-detail-toggle="{{s.id}}" onclick="toggleTableDetail(\'{{s.id}}\')">展开</button><a class=btn href="/servers/{{s.id}}">详情</a></td></tr>' + detail
+    )
+    template = template.replace(
+        '<div class=btns><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></td></tr>',
+        '<div class=btns><button type=button data-detail-toggle="{{s.id}}" onclick="toggleTableDetail(\'{{s.id}}\')">展开</button><a class="btn primary" href="/servers/{{s.id}}">查看</a><a class=btn href="/servers/{{s.id}}/edit">编辑</a></div></td></tr>' + detail
+    )
+    return template
+
+def _apply_view_dropdown_expand_patch():
+    global BASE, DASH, SERVERS
+    if 'view menu + expandable table + compact view' not in BASE:
+        BASE = BASE.replace('</style><script>', _VIEW_MENU_PATCH_CSS + '</style><script>')
+    if 'toggleTableDetail' not in BASE:
+        BASE = BASE.replace('</body></html>', _VIEW_MENU_PATCH_JS + '</body></html>')
+
+    DASH = re.sub(r'<div class=top><h1>(.*?)</h1><div class=btns>.*?<a class="btn primary" href="/servers/add">➕ 添加服务器</a></div></div>',
+                  lambda m: '<div class=top><h1>'+m.group(1)+'</h1>'+_view_menu_html(add_button=True,total_link=False)+'</div>',
+                  DASH, count=1, flags=re.S)
+    SERVERS = re.sub(r'<div class=top><h1>(.*?)</h1><div class=btns>.*?<a class="btn primary" href="/servers/add">➕ 添加服务器</a><a class=btn href="/">📊 总览</a></div></div>',
+                     lambda m: '<div class=top><h1>'+m.group(1)+'</h1>'+_view_menu_html(add_button=True,total_link=True)+'</div>',
+                     SERVERS, count=1, flags=re.S)
+
+    DASH = _patch_table_rows(DASH, '5')
+    SERVERS = _patch_table_rows(SERVERS, '6')
+
+    compact = _compact_view_html()
+    if 'data-view-compact' not in DASH:
+        DASH = DASH.replace('<div data-view-table class=hidden>', compact + '<div data-view-table class=hidden>', 1)
+    if 'data-view-compact' not in SERVERS:
+        SERVERS = SERVERS.replace('<div data-view-table class=hidden>', compact + '<div data-view-table class=hidden>', 1)
+
+_apply_view_dropdown_expand_patch()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
