@@ -2590,5 +2590,97 @@ app.jinja_env.globals.update(
 )
 # ===== END USER REQUEST PATCH =====
 
+
+# ===== USER COMPACT READABILITY PATCH: smaller cards + readable text + colorful expiry bars =====
+def expire_progress_info(s):
+    d = expire_days_value(s)
+    if d is None:
+        return {'days': None, 'percent': 0, 'class': 'unknown', 'text': '未设置到期日'}
+    if d == 999999:
+        return {'days': d, 'percent': 100, 'class': 'forever', 'text': '♾️ 永久 / 免费'}
+    if d < 0:
+        return {'days': d, 'percent': 100, 'class': 'danger', 'text': f'🚨 已过期 {abs(d)} 天'}
+    total = max(1, expire_cycle_days(s))
+    # 倒计时进度：按当前付费周期剩余天数计算，越接近到期越短。
+    pct = max(4, min(100, d * 100 / total)) if d > 0 else 100
+    # 不再把 7 天内全部渲染成红色：今天/3天内红色，4-15天黄色，15天以上彩色安全条。
+    cls = 'danger' if d <= 3 else 'warn' if d <= 15 else 'ok'
+    label = '🚨 今天到期' if d == 0 else f'📆 剩余 {d} 天'
+    return {'days': d, 'percent': pct, 'class': cls, 'text': label}
+
+def expire_progress_html(s):
+    info = expire_progress_info(s)
+    sid = html.escape(str((s or {}).get('id') or '0'))
+    cls = info['class']
+    pct = float(info['percent'] or 0)
+    text = html.escape(info['text'])
+    return f'''<div class="expire-progress-wrap {cls}" data-expwrap="{sid}"><div class="expire-progress-title"><span data-exptext="{sid}">{text}</span><b>{pct:.0f}%</b></div><div class="expire-progress"><div class="expire-bar {cls}" data-expbar="{sid}" style="width:{pct:.0f}%"></div></div></div>'''
+
+def server_card_class(s):
+    info = expire_progress_info(s)
+    cls = info.get('class') or 'unknown'
+    return f'expire-{cls}'
+
+def overview_compact_risk_html(data):
+    data = data or {}
+    ss = list(data.get('servers') or [])
+    total = int(data.get('total') or len(ss) or 0)
+    probes = int(data.get('probes') or 0)
+    expiring = int(data.get('expiring') or 0)
+    expired = int(data.get('expired') or 0)
+    unknown = int(data.get('unknown') or 0)
+    offline = int(data.get('offline') or 0)
+    auto = sum(1 for s in ss if truth(s.get('auto_renew')))
+    free = sum(1 for s in ss if truth(s.get('free_forever')))
+    stale = sum(1 for s in ss if not fresh(s.get('metrics') or {}))
+    healthy = max(0, total - offline - expired)
+    health_pct = round(healthy * 100 / total) if total else 100
+    def chip(cls, label, val, k=''):
+        attr = f' data-kpi={html.escape(k)}' if k else ''
+        return f'<div class="risk-chip {cls}"><span>{html.escape(label)}</span><b{attr}>{html.escape(str(val))}</b></div>'
+    chips = ''.join([
+        chip('warn','7天内到期',expiring,'expiring'),
+        chip('bad','已过期',expired,'expired'),
+        chip('muted','未知状态',unknown,'unknown'),
+        chip('ok','健康率',f'{health_pct}%'),
+    ])
+    tools = ''.join([
+        f'<span>📡 探针覆盖 <b>{probes}/{total}</b></span>',
+        f'<span>🔁 自动续费 <b>{auto}</b></span>',
+        f'<span>♾️ 永久/免费 <b>{free}</b></span>',
+        f'<span>🧭 数据超时 <b>{stale}</b></span>',
+        '<span>🧠 AI故障判断 <b>实时</b></span>',
+        '<span>🔌 WebSocket/SSE <b>0刷新</b></span>',
+    ])
+    return f'''<div class="card compact-risk-card"><h2>⏰ 到期与风险概览</h2><div class="risk-chip-grid">{chips}</div><div class="risk-tool-grid">{tools}</div></div>'''
+
+_COMPACT_READABILITY_CSS = r'''
+
+/* ===== compact readability patch requested by user ===== */
+html:not(.light) body:before{background-image:linear-gradient(rgba(255,255,255,.10),rgba(255,255,255,.14)),var(--custom-bg,none),radial-gradient(circle at 12% 8%,rgba(56,189,248,.64),transparent 28%),radial-gradient(circle at 86% 2%,rgba(244,114,182,.48),transparent 32%),radial-gradient(circle at 46% 110%,rgba(34,197,94,.42),transparent 34%),linear-gradient(135deg,#2563eb 0%,#8b5cf6 38%,#06b6d4 72%,#22c55e 112%)!important;filter:saturate(1.18) brightness(1.18)!important}
+body{font-size:14px!important;line-height:1.5!important;font-weight:680!important}.layout{grid-template-columns:220px 1fr!important}.side{padding:16px!important}.main{padding:16px!important}.top{gap:10px!important;margin-bottom:12px!important}.top h1{font-size:clamp(23px,2.4vw,34px)!important}.brand{gap:9px!important}.brand .ico{width:36px!important;height:36px!important;border-radius:14px!important}.nav a{padding:9px 10px!important;border-radius:13px!important;font-size:13px!important}.switches{gap:7px!important}.themebtn,.btn,button{padding:8px 10px!important;border-radius:12px!important;font-size:13px!important}.card{padding:13px!important;border-radius:18px!important;box-shadow:0 12px 36px rgba(30,64,175,.18),inset 0 1px 0 rgba(255,255,255,.16)!important}.grid,.grid2,.grid3,.cardgrid{gap:10px!important}.grid{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))!important}.grid2{grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr)!important}.grid3{grid-template-columns:repeat(auto-fit,minmax(90px,1fr))!important}.cardgrid{grid-template-columns:repeat(auto-fit,minmax(245px,1fr))!important}.value,.kpi .value{font-size:28px!important;line-height:1.05!important}.label{font-size:12px!important}.badge{padding:5px 8px!important;border-radius:999px!important;font-size:12px!important}.small,.muted{font-size:12px!important}h2{font-size:17px!important;margin:0 0 9px!important}h3{font-size:15.5px!important;margin:0 0 8px!important}hr{margin:10px 0!important}.table th,.table td{padding:8px!important;font-size:13px!important;line-height:1.5!important}.scrollbox{padding:6px!important}input,select,textarea,pre{font-size:13px!important;padding:9px 10px!important;border-radius:12px!important}.progressrow{gap:7px!important;margin:6px 0!important;font-size:12px!important}.progress{height:9px!important}.bar{height:100%!important}.metric-extra{gap:6px!important;margin-top:8px!important;grid-template-columns:repeat(auto-fit,minmax(112px,1fr))!important}.metric-extra .mini{padding:6px 7px!important;min-height:auto!important;border-radius:11px!important;font-size:11.5px!important}.metric-extra .mini b{font-size:11px!important}.ai-mini span{line-height:1.4!important}.ops-grid{gap:10px!important;margin-top:10px!important}.ops-card{min-height:190px!important}.topology-map{height:160px!important;border-radius:18px!important}.radar{width:128px!important;height:128px!important;margin:4px auto 8px!important}.radar span{width:62px!important;height:62px!important;font-size:21px!important}.radar-legend{gap:6px!important}.radar-legend b{padding:6px!important;font-size:11px!important}.feature-card{margin-top:10px!important}.feature-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))!important;gap:7px!important}.feature-grid span{padding:8px 9px!important;border-radius:12px!important;font-size:12px!important}.neon-live-chip{padding:4px 8px!important;font-size:11px!important}.server-title,.server-title .name,.servercard h3,.servercard h3 .name{background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;text-shadow:0 1px 3px rgba(0,0,0,.82),0 0 13px rgba(14,165,233,.32)!important;font-weight:1000!important}.server-title .name{display:inline-block;max-width:100%;word-break:break-word}html.light .server-title,html.light .server-title .name,html.light .servercard h3,html.light .servercard h3 .name{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;text-shadow:0 1px 0 rgba(255,255,255,.72)!important}.card h2,.card h3:not(.server-title),.table td b,.metric-extra .mini b,.risk-tool-grid b{background:none!important;-webkit-background-clip:initial!important;background-clip:initial!important;color:#f8fbff!important;-webkit-text-fill-color:#f8fbff!important;text-shadow:0 1px 3px rgba(0,0,0,.70)!important}.top h1{background:linear-gradient(90deg,#fff,#7dd3fc,#f0abfc,#86efac,#fde68a)!important;-webkit-background-clip:text!important;background-clip:text!important;color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:0 0 2px rgba(255,255,255,.95),0 0 14px rgba(56,189,248,.34)!important}html.light .card h2,html.light .card h3:not(.server-title),html.light .table td b,html.light .metric-extra .mini b,html.light .risk-tool-grid b{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;text-shadow:none!important}.card p,.card span,.card div,.table td{color:inherit}.expire-progress-wrap{margin:7px 0 6px!important}.expire-progress-title{font-size:11px!important}.expire-progress{height:10px!important;background:rgba(255,255,255,.20)!important}.expire-bar{background:linear-gradient(90deg,#22c55e,#06b6d4,#8b5cf6,#ec4899)!important}.expire-bar.warn{background:linear-gradient(90deg,#facc15,#fb923c,#f472b6)!important}.expire-bar.danger{background:linear-gradient(90deg,#ef4444,#f97316,#facc15)!important}.expire-bar.forever{background:linear-gradient(90deg,#10b981,#22c55e,#84cc16,#06b6d4)!important}.servercard.expire-danger{animation:expireCardPulse 1.8s ease-in-out infinite!important}.servercard.expire-warn{box-shadow:0 12px 36px rgba(251,191,36,.14)!important}.compact-risk-card{min-height:0!important}.risk-chip-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.risk-chip{padding:8px;border-radius:14px;border:1px solid rgba(255,255,255,.22);background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.07));display:grid;gap:2px}.risk-chip span{font-size:11px;color:rgba(247,251,255,.88);font-weight:850}.risk-chip b{font-size:22px;line-height:1;font-weight:1000}.risk-chip.ok b{color:#86efac}.risk-chip.warn b{color:#fde68a}.risk-chip.bad b{color:#fb7185}.risk-chip.muted b{color:#c4b5fd}.risk-tool-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-top:9px}.risk-tool-grid span{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:7px 8px;border-radius:12px;border:1px solid rgba(255,255,255,.20);background:rgba(255,255,255,.10);font-size:11.5px;font-weight:850}html.light .risk-chip span{color:#334155}html.light .risk-tool-grid span{background:rgba(255,255,255,.68);border-color:rgba(15,23,42,.12)}@media(max-width:980px){.layout{grid-template-columns:1fr!important}.side{position:relative!important;height:auto!important}.grid2{grid-template-columns:1fr!important}.risk-chip-grid{grid-template-columns:repeat(2,1fr)}.risk-tool-grid{grid-template-columns:1fr}.ops-grid{grid-template-columns:1fr!important}.cardgrid{grid-template-columns:1fr!important}}
+/* ===== end compact readability patch requested by user ===== */
+'''
+
+def _apply_compact_readability_patch():
+    global BASE, LOGIN, DASH, SERVERS, DETAIL, FORM, LOCAL
+    if 'compact readability patch requested by user' not in BASE:
+        BASE = BASE.replace('</style><script>', _COMPACT_READABILITY_CSS + '</style><script>')
+    if 'compact readability patch requested by user' not in LOGIN:
+        LOGIN = LOGIN.replace('</style><script>', _COMPACT_READABILITY_CSS + '</style><script>')
+    old = '''<div class=card><h2>⏰ 到期和风险</h2><div class=grid3><div class=card><div class=label>⚠️ 7天内到期</div><div class="value warn" data-kpi=expiring>{{data.expiring}}</div></div><div class=card><div class=label>🚨 已过期</div><div class="value bad" data-kpi=expired>{{data.expired}}</div></div><div class=card><div class=label>⚪ 未知</div><div class=value data-kpi=unknown>{{data.unknown}}</div></div></div></div>'''
+    new = '{{overview_compact_risk_html(data)|safe}}'
+    if old in DASH:
+        DASH = DASH.replace(old, new)
+    app.jinja_env.globals.update(
+        expire_progress_html=expire_progress_html,
+        expire_progress_info=expire_progress_info,
+        server_card_class=server_card_class,
+        overview_compact_risk_html=overview_compact_risk_html,
+    )
+
+_apply_compact_readability_patch()
+# ===== END USER COMPACT READABILITY PATCH =====
+
 app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row,site_name=site_name,favicon_exists=favicon_exists,clean_event_html=clean_event_html,event_context=event_context,display_price_label=display_price_label,display_expire_label=display_expire_label,metric_config_html=metric_config_html,site_name_value=site_name_value,bot_token_value=bot_token_value,admin_ids_value=admin_ids_value,datetime_input_value=datetime_input_value,probe_os_name_for_server=probe_os_name_for_server)
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
