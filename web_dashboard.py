@@ -2462,7 +2462,7 @@ def ops_radar_html(servers):
     return f'''<div class="card ops-card radar-card {cls}"><h2>🛰️ 运维攻击流量雷达图</h2><div class="radar" style="--risk:{risk:.0f}%"><span>{risk:.0f}</span></div><div class="radar-legend"><b>离线 {offline}/{total}</b><b>CPU {cpu:.0f}%</b><b>内存 {mem:.0f}%</b><b>TCP {tcp}</b></div><p class="small">基于离线率、资源峰值、TCP 连接数做运维风险雷达判断。</p></div>'''
 
 def ops_feature_panel(servers):
-    return '''<div class="card ops-card feature-card"><h2>🔥 路西法 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全国节点地图拓扑</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'''
+    return '''<div class="card ops-card feature-card"><h2>🔥 Komari 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全国节点地图拓扑</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'''
 
 def _live_payload():
     init_db()
@@ -2775,7 +2775,7 @@ def node_topology_html(servers):
 
 
 def ops_feature_panel(servers):
-    return '<div class="card ops-card feature-card"><h2>🔥 路西法 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全球节点雷达地图</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'
+    return '<div class="card ops-card feature-card"><h2>🔥 Komari 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全球节点雷达地图</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'
 
 
 _FINAL_TITLE_MAP_CSS = r'''
@@ -4097,5 +4097,223 @@ def _apply_strict_lamp_ai_fix():
 
 _apply_strict_lamp_ai_fix()
 # ===== END STRICT FIX ONLY =====
+
+
+# ===== REAL FIX: WebSocket/SSE lamp JS sentinel bug + stronger AI selector =====
+_REAL_LAMP_AI_FIX_CSS = r"""
+/* ===== real fix: visible live lamp + AI block layout ===== */
+
+/* 状态灯：给 title-chip / neon-live-chip 都加可见呼吸灯 */
+[data-neon-live]{
+  display:inline-flex!important;
+  align-items:center!important;
+  gap:8px!important;
+}
+[data-neon-live] .real-live-lamp{
+  display:inline-block!important;
+  width:11px!important;
+  height:11px!important;
+  min-width:11px!important;
+  min-height:11px!important;
+  border-radius:999px!important;
+  background:#f59e0b!important;
+  box-shadow:0 0 10px rgba(245,158,11,1),0 0 24px rgba(245,158,11,.50)!important;
+  animation:realLampAmber 1.3s ease-in-out infinite!important;
+  vertical-align:middle!important;
+}
+[data-neon-live].real-ws .real-live-lamp{
+  background:#22c55e!important;
+  box-shadow:0 0 10px rgba(34,197,94,1),0 0 28px rgba(34,197,94,.58)!important;
+  animation:realLampGreen 1.3s ease-in-out infinite!important;
+}
+[data-neon-live].real-sse .real-live-lamp{
+  background:#facc15!important;
+  box-shadow:0 0 10px rgba(250,204,21,1),0 0 28px rgba(250,204,21,.58)!important;
+  animation:realLampYellow 1.3s ease-in-out infinite!important;
+}
+[data-neon-live].real-bad .real-live-lamp{
+  background:#ef4444!important;
+  box-shadow:0 0 10px rgba(239,68,68,1),0 0 28px rgba(239,68,68,.60)!important;
+  animation:realLampRed 1.3s ease-in-out infinite!important;
+}
+@keyframes realLampGreen{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.18);opacity:.96}}
+@keyframes realLampYellow{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.16);opacity:.96}}
+@keyframes realLampAmber{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.16);opacity:.96}}
+@keyframes realLampRed{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.16);opacity:.96}}
+
+/* AI：用比旧 grid 规则更高的选择器，强制标题上、内容下 */
+html body .servercard .metric-extra div.mini.ai-mini,
+html body .card .metric-extra div.mini.ai-mini,
+html body div.metric-extra > div.mini.ai-mini,
+html body .metric-extra .mini.ai-mini{
+  display:block!important;
+  grid-template-columns:none!important;
+  width:100%!important;
+  min-width:0!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:10px 0 0!important;
+  padding:10px 11px!important;
+  border-radius:15px!important;
+  border:1px solid rgba(125,211,252,.24)!important;
+  background:linear-gradient(135deg,rgba(34,211,238,.13),rgba(96,165,250,.09),rgba(52,211,153,.08))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 8px 22px rgba(14,165,233,.10)!important;
+  overflow:visible!important;
+}
+html body .servercard .metric-extra div.mini.ai-mini b,
+html body .card .metric-extra div.mini.ai-mini b,
+html body div.metric-extra > div.mini.ai-mini b,
+html body .metric-extra .mini.ai-mini b{
+  display:block!important;
+  width:100%!important;
+  margin:0 0 6px!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+  background:none!important;
+  background-image:none!important;
+  -webkit-background-clip:initial!important;
+  background-clip:initial!important;
+  font-size:12px!important;
+  line-height:1.3!important;
+  font-weight:1000!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
+}
+html body .servercard .metric-extra div.mini.ai-mini > span,
+html body .card .metric-extra div.mini.ai-mini > span,
+html body div.metric-extra > div.mini.ai-mini > span,
+html body .metric-extra .mini.ai-mini > span,
+html body [data-ai],
+html body [data-local-ai]{
+  display:block!important;
+  width:100%!important;
+  min-width:0!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:normal!important;
+  word-break:break-word!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  line-height:1.45!important;
+  font-size:11.5px!important;
+  letter-spacing:0!important;
+  font-weight:950!important;
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  text-shadow:none!important;
+}
+html.light body .servercard .metric-extra div.mini.ai-mini,
+html.light body .card .metric-extra div.mini.ai-mini,
+html.light body div.metric-extra > div.mini.ai-mini,
+html.light body .metric-extra .mini.ai-mini{
+  border-color:rgba(37,99,235,.17)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.62),rgba(219,234,254,.46),rgba(240,253,250,.36))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.76),0 8px 20px rgba(37,99,235,.08)!important;
+}
+html.light body .metric-extra .mini.ai-mini b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light body .metric-extra .mini.ai-mini > span,
+html.light body [data-ai],
+html.light body [data-local-ai]{
+  background:linear-gradient(90deg,#0369a1,#2563eb,#7c3aed,#059669)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  -webkit-text-fill-color:transparent!important;
+}
+/* ===== end real fix ===== */
+"""
+
+_REAL_LAMP_AI_FIX_JS = r"""
+<script>
+(function(){
+  function stateFromText(t){
+    t = (t || '').replace(/\s+/g,' ');
+    if(/WebSocket/i.test(t)) return 'real-ws';
+    if(/\bSSE\b/i.test(t)) return 'real-sse';
+    if(/轮询|回退|失败|断开|错误|异常/i.test(t)) return 'real-bad';
+    return 'real-connecting';
+  }
+
+  function fixLiveLamp(){
+    var chip = document.querySelector('[data-neon-live]');
+    if(!chip) return;
+    var lamp = chip.querySelector('.real-live-lamp');
+    if(!lamp){
+      lamp = document.createElement('span');
+      lamp.className = 'real-live-lamp';
+      chip.insertBefore(lamp, chip.firstChild);
+    }
+    chip.classList.remove('real-ws','real-sse','real-bad','real-connecting');
+    chip.classList.add(stateFromText(chip.textContent || ''));
+  }
+
+  function forceAiLayout(){
+    document.querySelectorAll('.metric-extra .mini.ai-mini').forEach(function(box){
+      box.style.setProperty('display','block','important');
+      box.style.setProperty('grid-template-columns','none','important');
+      box.style.setProperty('width','100%','important');
+      box.style.setProperty('height','auto','important');
+      box.style.setProperty('min-height','0','important');
+      box.style.setProperty('padding','10px 11px','important');
+      box.style.setProperty('border-radius','15px','important');
+      box.style.setProperty('overflow','visible','important');
+
+      var title = box.querySelector('b');
+      if(title){
+        title.style.setProperty('display','block','important');
+        title.style.setProperty('width','100%','important');
+        title.style.setProperty('margin','0 0 6px','important');
+        title.style.setProperty('white-space','nowrap','important');
+      }
+
+      var data = box.querySelector('[data-ai], [data-local-ai], span');
+      if(data){
+        data.style.setProperty('display','block','important');
+        data.style.setProperty('width','100%','important');
+        data.style.setProperty('white-space','normal','important');
+        data.style.setProperty('word-break','break-word','important');
+        data.style.setProperty('overflow','visible','important');
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    fixLiveLamp();
+    forceAiLayout();
+
+    var chip = document.querySelector('[data-neon-live]');
+    if(chip){
+      try{
+        new MutationObserver(fixLiveLamp).observe(chip,{childList:true,characterData:true,subtree:true});
+      }catch(e){}
+    }
+
+    setInterval(function(){
+      fixLiveLamp();
+      forceAiLayout();
+    }, 800);
+  });
+})();
+</script>
+"""
+
+def _apply_real_lamp_ai_fix():
+    global BASE
+    if 'real fix: visible live lamp + AI block layout' not in BASE:
+        BASE = BASE.replace('</style><script>', _REAL_LAMP_AI_FIX_CSS + '</style><script>')
+    # 之前的问题就在这里：旧代码用灯的 class 名做判断，CSS 里已经包含该字符串，导致 JS 没注入。
+    # 这里换成只检查 JS 函数名，确保脚本一定注入。
+    if 'function fixLiveLamp()' not in BASE:
+        BASE = BASE.replace('</script></head><body>', '</script>' + _REAL_LAMP_AI_FIX_JS + '</head><body>')
+
+_apply_real_lamp_ai_fix()
+# ===== END REAL FIX =====
 
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
