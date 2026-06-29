@@ -2834,48 +2834,4 @@ def _apply_final_title_map_patch():
 _apply_final_title_map_patch()
 # ===== END FINAL USER PATCH =====
 
-# ===== SCREENSHOT FEEDBACK PATCH: light expiry visibility + better world map + stable network boxes =====
-_SCREENSHOT_FIX_CSS = r'''
-/* ===== screenshot feedback patch ===== */
-.expire-progress-wrap{position:relative!important;overflow:hidden!important}
-.expire-progress-wrap .expire-progress{position:relative!important}
-.expire-progress-wrap .expire-bar{min-width:12px!important;position:relative!important}
-.expire-progress-wrap .expire-bar::after{content:""!important;position:absolute!important;inset:0!important;background:linear-gradient(90deg,rgba(255,255,255,.00),rgba(255,255,255,.28),rgba(255,255,255,.00))!important;mix-blend-mode:screen!important;animation:expSheen 2.7s linear infinite!important}
-html.light .expire-progress-wrap{background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(250,245,255,.92))!important;border-color:rgba(168,85,247,.18)!important;box-shadow:0 8px 18px rgba(168,85,247,.08), inset 0 1px 0 rgba(255,255,255,.95)!important}
-html.light .expire-progress-wrap .expire-progress{background:linear-gradient(180deg,rgba(192,132,252,.12),rgba(244,114,182,.08))!important;box-shadow:inset 0 0 0 1px rgba(168,85,247,.10)!important}
-html.light .expire-progress-wrap .expire-progress-title span,
-html.light .expire-progress-wrap .expire-progress-title b{color:#7c3aed!important;-webkit-text-fill-color:#7c3aed!important;text-shadow:none!important;font-weight:1000!important}
-html.light .expire-progress-wrap .expire-bar{filter:saturate(1.42) brightness(1.08)!important;box-shadow:0 0 0 1px rgba(255,255,255,.65),0 0 12px rgba(168,85,247,.16)!important}
-html.light .expire-progress-wrap.forever .expire-bar{box-shadow:0 0 0 1px rgba(255,255,255,.62),0 0 12px rgba(16,185,129,.18)!important}
-html.light .expire-progress-wrap.warn .expire-bar{box-shadow:0 0 0 1px rgba(255,255,255,.62),0 0 12px rgba(251,191,36,.18)!important}
-html.light .expire-progress-wrap.danger .expire-bar{box-shadow:0 0 0 1px rgba(255,255,255,.62),0 0 12px rgba(239,68,68,.18)!important}
-
-.metric-extra{align-items:stretch!important}
-.metric-extra .mini{display:flex!important;flex-direction:column!important;justify-content:space-between!important;align-items:flex-start!important;min-height:60px!important;overflow:hidden!important}
-.metric-extra .mini span,
-[data-netspeed],[data-traffic],[data-load],
-[data-local-netspeed],[data-local-traffic],[data-local-load]{display:block!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;min-height:1.45em!important;line-height:1.45!important;font-variant-numeric:tabular-nums!important;font-feature-settings:"tnum" 1!important;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important}
-
-.world-radar{background:radial-gradient(circle at 73% 43%,rgba(34,197,94,.11),transparent 11%),radial-gradient(circle at 44% 48%,rgba(56,189,248,.06),transparent 34%),linear-gradient(180deg,rgba(4,15,38,.76),rgba(15,23,42,.90))!important}
-.world-outline .landmass{fill:rgba(114,151,216,.20)!important;stroke:rgba(158,184,224,.50)!important;stroke-width:2.1!important;stroke-linejoin:round!important}
-.world-outline .island{fill:rgba(114,151,216,.18)!important;stroke:rgba(158,184,224,.42)!important;stroke-width:1.7!important;stroke-linejoin:round!important}
-.world-link{opacity:.52!important}
-@keyframes expSheen{0%{transform:translateX(-110%)}100%{transform:translateX(110%)}}
-/* ===== end screenshot feedback patch ===== */
-'''
-
-
-def _world_map_svg():
-    return """<svg class=\"world-svg\" viewBox=\"0 0 1000 520\" preserveAspectRatio=\"none\" aria-hidden=\"true\">\n    <g class=\"world-outline\">\n      <polygon class=\"landmass\" points=\"46,232 60,182 88,150 80,120 126,92 186,100 242,126 274,160 275,196 238,220 190,214 158,214 130,224 108,256\" />\n      <polygon class=\"landmass\" points=\"242,290 294,320 318,374 300,436 270,478 234,468 214,410 220,348\" />\n      <polygon class=\"island\" points=\"444,118 486,103 528,110 534,138 492,154 456,146\" />\n      <polygon class=\"landmass\" points=\"406,160 450,148 500,152 548,166 604,172 646,188 676,214 720,216 738,200 778,198 838,186 886,192 910,210 896,228 858,234 834,250 800,260 772,252 760,234 734,232 708,246 688,280 654,292 626,332 578,336 546,322 512,346 478,336 454,312 430,294 400,276 376,252 392,198\" />\n      <polygon class=\"landmass\" points=\"520,354 560,360 594,380 584,410 548,420 506,408 494,384\" />\n      <polygon class=\"landmass\" points=\"736,298 784,308 836,334 898,382 892,426 846,450 784,444 742,420 720,378 722,334\" />\n      <polygon class=\"landmass\" points=\"822,226 862,220 900,224 930,244 918,264 884,272 850,266 818,252 806,236\" />\n      <polygon class=\"landmass\" points=\"728,220 754,188 792,176 820,182 800,204 786,224 758,238\" />\n      <polygon class=\"landmass\" points=\"896,434 926,430 956,444 952,472 922,484 892,470 886,452\" />\n      <polygon class=\"island\" points=\"520,126 548,116 572,126 566,142 540,148\" />\n      <polygon class=\"island\" points=\"796,128 820,122 842,132 836,146 814,148\" />\n    </g></svg>"""
-
-
-def _apply_screenshot_feedback_patch():
-    global BASE
-    if 'screenshot feedback patch' not in BASE:
-        BASE = BASE.replace('</style><script>', _SCREENSHOT_FIX_CSS + '</style><script>')
-
-
-_apply_screenshot_feedback_patch()
-# ===== END SCREENSHOT FEEDBACK PATCH =====
-
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
