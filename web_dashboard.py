@@ -2683,4 +2683,155 @@ _apply_compact_readability_patch()
 # ===== END USER COMPACT READABILITY PATCH =====
 
 app.jinja_env.globals.update(fmt=fmt,dur=dur,duration=dur,exptext=exptext,expire_text=exptext,pricet=pricet,price_text=pricet,cycle=cycle,cycle_cn=cycle,fresh=fresh,flag=flag,server_flag=server_flag,fmt_size=fmt,age=age,server_location_cn=server_location_cn,bar_class=bar_class,flag_icon=flag_icon,server_country_code=server_country_code,status_color_class_by_days=status_color_class_by_days,active_theme_css=active_theme_css,progress_row=progress_row,site_name=site_name,favicon_exists=favicon_exists,clean_event_html=clean_event_html,event_context=event_context,display_price_label=display_price_label,display_expire_label=display_expire_label,metric_config_html=metric_config_html,site_name_value=site_name_value,bot_token_value=bot_token_value,admin_ids_value=admin_ids_value,datetime_input_value=datetime_input_value,probe_os_name_for_server=probe_os_name_for_server)
+# ===== FINAL USER PATCH: readable main titles + per-server expiry gradients + global radar world map =====
+def page_title_html(emoji, text, chip=''):
+    chip_html = f'<span class="title-chip">{html.escape(str(chip))}</span>' if chip else ''
+    return f'<span class="title-emoji">{emoji}</span><span class="title-text">{html.escape(str(text))}</span>{chip_html}'
+
+
+def _expire_gradient_for_days(days):
+    # 不同剩余天数给不同颜色，而不是整批同色
+    if days is None:
+        return 'linear-gradient(90deg,#94a3b8,#cbd5e1,#e2e8f0)'
+    if days == 999999:
+        return 'linear-gradient(90deg,#10b981,#22c55e,#2dd4bf,#60a5fa)'
+    if days < 0:
+        return 'linear-gradient(90deg,#ef4444,#fb7185,#f97316,#facc15)'
+    if days == 0:
+        return 'linear-gradient(90deg,#dc2626,#f97316,#facc15)'
+    d = max(1, min(120, int(days)))
+    hue = int(d / 120 * 160)
+    h1 = hue
+    h2 = min(195, hue + 28)
+    h3 = min(245, hue + 56)
+    return f'linear-gradient(90deg,hsl({h1} 84% 58%),hsl({h2} 92% 62%),hsl({h3} 96% 68%))'
+
+
+def expire_progress_info(s):
+    d = expire_days_value(s)
+    if d is None:
+        return {'days': None, 'percent': 0, 'class': 'unknown', 'text': '未设置到期日', 'gradient': _expire_gradient_for_days(None)}
+    if d == 999999:
+        return {'days': d, 'percent': 100, 'class': 'forever', 'text': '♾️ 永久 / 免费', 'gradient': _expire_gradient_for_days(d)}
+    if d < 0:
+        return {'days': d, 'percent': 100, 'class': 'danger', 'text': f'🚨 已过期 {abs(d)} 天', 'gradient': _expire_gradient_for_days(d)}
+    total = max(1, expire_cycle_days(s))
+    pct = max(4, min(100, d * 100 / total)) if d > 0 else 100
+    cls = 'danger' if d <= 3 else 'warn' if d <= 15 else 'ok'
+    label = '🚨 今天到期' if d == 0 else f'📆 剩余 {d} 天'
+    return {'days': d, 'percent': pct, 'class': cls, 'text': label, 'gradient': _expire_gradient_for_days(d)}
+
+
+def expire_progress_html(s):
+    info = expire_progress_info(s)
+    sid = html.escape(str((s or {}).get('id') or '0'))
+    cls = info['class']
+    pct = float(info['percent'] or 0)
+    text = html.escape(info['text'])
+    grad = html.escape(info.get('gradient') or _expire_gradient_for_days(info.get('days')))
+    return f"<div class=\"expire-progress-wrap {cls}\" data-expwrap=\"{sid}\" style=\"--exp-grad:{grad}\"><div class=\"expire-progress-title\"><span data-exptext=\"{sid}\">{text}</span><b>{pct:.0f}%</b></div><div class=\"expire-progress\"><div class=\"expire-bar {cls}\" data-expbar=\"{sid}\" style=\"width:{pct:.0f}%\"></div></div></div>"
+
+
+def _global_pin_xy_for_server(s, i=0):
+    code = server_country_code(s)
+    city = str((s or {}).get('city') or (s or {}).get('region') or '').lower()
+    mapping = {
+        'CN': (73, 43), 'HK': (76, 50), 'TW': (79, 49), 'JP': (84, 42), 'KR': (81, 40),
+        'SG': (74, 63), 'IN': (64, 53), 'TH': (71, 57), 'VN': (74, 56), 'MY': (73, 61),
+        'PH': (80, 58), 'ID': (79, 67), 'AE': (58, 49), 'TR': (54, 41), 'RU': (64, 23),
+        'DE': (50, 33), 'FR': (48, 36), 'GB': (45, 29), 'NL': (49, 31), 'ES': (45, 40),
+        'IT': (52, 39), 'US': (21, 37), 'CA': (20, 25), 'MX': (18, 48), 'BR': (31, 70),
+        'AR': (29, 83), 'CL': (24, 78), 'AU': (83, 77), 'NZ': (92, 82), 'ZA': (54, 81)
+    }
+    if 'beijing' in city or '北京' in city:
+        return (74, 39)
+    if 'shanghai' in city or '上海' in city:
+        return (76, 45)
+    if 'guangzhou' in city or '深圳' in city or '广州' in city:
+        return (75, 52)
+    return mapping.get(code, ((14 + i*11) % 82 + 8, (18 + i*13) % 60 + 18))
+
+
+def _world_map_svg():
+    return """<svg class=\"world-svg\" viewBox=\"0 0 1000 520\" preserveAspectRatio=\"none\" aria-hidden=\"true\">\n    <g class=\"world-outline\">\n      <path d=\"M88 118l42-25 58 8 54 24 26 33 2 37-31 26-39-5-38 18-29 46-49 11-38-34 14-49 30-27-8-38z\"/>\n      <path d=\"M244 322l51 30 23 54-17 62-30 41-35-10-19-57 7-62 20-58z\"/>\n      <path d=\"M447 122l43-18 42 10 8 23-34 18-39-12z\"/>\n      <path d=\"M472 168l48-11 61 12 40 25 23 20 22 1 14-13 34 4 16 19-6 22-26 16-34 10-11 30-24 13-18 30-31 5-37-14-26 23-31-11-22-37-42-34-29-37 6-37 34-24 20-42z\"/>\n      <path d=\"M744 330l49 15 62 34 45 38-5 43-37 26-63-5-41-25-26-45 2-37 14-44z\"/>\n      <path d=\"M825 193l35-8 34 7 16 17-11 18-34 7-24 23-30 9-26-10-12-20 18-16 18-27z\"/>\n      <path d=\"M515 388l39 7 32 20-7 29-33 10-35-12-15-22 19-32z\"/>\n    </g></svg>"""
+
+
+def node_topology_html(servers):
+    servers = list(servers or [])
+    pins = []
+    lines = []
+    hub_x, hub_y = 73, 43
+    for i, s in enumerate(servers[:36]):
+        x, y = _global_pin_xy_for_server(s, i)
+        name = html.escape(str(s.get('name') or f'节点{i+1}'))
+        loc = html.escape(str(s.get('location_cn') or s.get('location') or '未知'))
+        online = 'online' if s.get('online') else 'offline'
+        angle = (1 if x >= hub_x else -1) * max(4, abs(hub_y - y) * 1.18)
+        lines.append(f'<span class="world-link {online}" style="left:{min(x,hub_x):.1f}%;top:{min(y,hub_y):.1f}%;width:{abs(hub_x-x):.1f}%;transform:rotate({angle:.1f}deg)"></span>')
+        pins.append(f'<span class="world-pin {online}" style="left:{x:.1f}%;top:{y:.1f}%" title="{name}｜{loc}"><i></i><b>{name}</b></span>')
+    if not pins:
+        pins.append('<span class="map-empty">暂无节点</span>')
+    return '<div class="card ops-card topology-card"><h2>🗺️ 全球节点雷达地图</h2><div class="world-radar"><div class="world-grid"></div>' + _world_map_svg() + '<div class="scan-ring ring1"></div><div class="scan-ring ring2"></div><div class="scan-ring ring3"></div><div class="scan-beam"></div><div class="radar-hub">主控</div>' + ''.join(lines) + ''.join(pins) + '</div><p class="small">全球节点以雷达地图方式显示：绿色在线、红色离线，中心为主控侧汇聚点。</p></div>'
+
+
+def ops_feature_panel(servers):
+    return '<div class="card ops-card feature-card"><h2>🔥 Komari 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全球节点雷达地图</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'
+
+
+_FINAL_TITLE_MAP_CSS = r'''
+/* ===== final readability + world radar patch ===== */
+.top h1{display:flex!important;align-items:center!important;gap:10px!important;flex-wrap:wrap!important;background:none!important;color:#f8fbff!important;-webkit-text-fill-color:#f8fbff!important;text-shadow:0 2px 8px rgba(0,0,0,.74),0 0 18px rgba(56,189,248,.26)!important;font-weight:1000!important;letter-spacing:.2px!important}
+.top h1 .title-emoji{display:inline-flex!important;align-items:center!important;line-height:1!important;font-size:1.05em!important;background:none!important;color:initial!important;-webkit-text-fill-color:initial!important;text-shadow:0 2px 6px rgba(0,0,0,.32)!important;filter:saturate(1.08) drop-shadow(0 2px 6px rgba(255,255,255,.12))!important}
+.top h1 .title-text{display:inline-block!important;background:none!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;text-shadow:0 2px 8px rgba(0,0,0,.78),0 0 14px rgba(125,211,252,.24)!important}
+.top h1 .title-chip{display:inline-flex!important;align-items:center!important;gap:6px!important;padding:4px 10px!important;border-radius:999px!important;border:1px solid rgba(255,255,255,.24)!important;background:linear-gradient(135deg,rgba(34,197,94,.18),rgba(56,189,248,.14),rgba(168,85,247,.16))!important;color:#f8fbff!important;-webkit-text-fill-color:#f8fbff!important;font-size:12px!important;font-weight:900!important;text-shadow:none!important;box-shadow:0 0 18px rgba(34,197,94,.12)!important}
+html.light .top h1,html.light .top h1 .title-text{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;text-shadow:0 1px 0 rgba(255,255,255,.72),0 0 10px rgba(255,255,255,.28)!important}
+html.light .top h1 .title-chip{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;background:linear-gradient(135deg,rgba(186,230,253,.86),rgba(233,213,255,.88),rgba(254,240,138,.84))!important;border-color:rgba(15,23,42,.10)!important}
+
+.expire-progress-wrap{--exp-grad:linear-gradient(90deg,#22c55e,#06b6d4,#8b5cf6)!important;border:1px solid rgba(255,255,255,.14)!important;border-radius:14px!important;padding:7px 8px!important;background:linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,.04))!important}
+.expire-progress-wrap .expire-progress{height:10px!important;border-radius:999px!important;overflow:hidden!important;background:rgba(255,255,255,.12)!important}
+.expire-progress-wrap .expire-bar{background:var(--exp-grad)!important;box-shadow:0 0 15px rgba(255,255,255,.12),0 0 22px rgba(56,189,248,.14)!important;border-radius:999px!important}
+.expire-progress-wrap.forever{box-shadow:0 0 18px rgba(16,185,129,.10)!important}
+.expire-progress-wrap.warn{box-shadow:0 0 18px rgba(250,204,21,.08)!important}
+.expire-progress-wrap.danger{box-shadow:0 0 18px rgba(239,68,68,.12)!important}
+
+.ops-grid{grid-template-columns:minmax(0,1.18fr) minmax(300px,.82fr)!important;align-items:stretch!important}
+.topology-card{overflow:hidden!important}
+.world-radar{position:relative!important;height:300px!important;border-radius:22px!important;overflow:hidden!important;border:1px solid rgba(255,255,255,.16)!important;background:radial-gradient(circle at 72% 43%,rgba(34,197,94,.10),transparent 12%),radial-gradient(circle at 50% 50%,rgba(56,189,248,.07),transparent 38%),linear-gradient(180deg,rgba(2,6,23,.62),rgba(15,23,42,.82))!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),0 14px 38px rgba(2,6,23,.25)!important}
+.world-grid{position:absolute!important;inset:0!important;background-image:linear-gradient(rgba(148,163,184,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.08) 1px,transparent 1px)!important;background-size:28px 28px!important;opacity:.7!important}
+.world-svg{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;opacity:.95!important}
+.world-outline path{fill:rgba(59,130,246,.14)!important;stroke:rgba(148,163,184,.42)!important;stroke-width:2.2!important}
+.scan-ring{position:absolute!important;left:73%!important;top:43%!important;transform:translate(-50%,-50%)!important;border-radius:50%!important;border:1px solid rgba(34,197,94,.22)!important;box-shadow:0 0 18px rgba(34,197,94,.12)!important}
+.scan-ring.ring1{width:70px!important;height:70px!important}.scan-ring.ring2{width:150px!important;height:150px!important}.scan-ring.ring3{width:250px!important;height:250px!important}
+.scan-beam{position:absolute!important;left:73%!important;top:43%!important;width:260px!important;height:260px!important;transform:translate(-50%,-50%)!important;border-radius:50%!important;background:conic-gradient(from 0deg,rgba(34,197,94,0) 0deg,rgba(34,197,94,0) 295deg,rgba(74,222,128,.24) 328deg,rgba(190,242,100,.52) 352deg,rgba(34,197,94,0) 360deg)!important;mix-blend-mode:screen!important;animation:worldSweep 5.8s linear infinite!important;pointer-events:none!important}
+.radar-hub{position:absolute!important;left:73%!important;top:43%!important;transform:translate(-50%,-50%)!important;min-width:40px!important;height:40px!important;padding:0 10px!important;border-radius:999px!important;display:flex!important;align-items:center!important;justify-content:center!important;background:linear-gradient(135deg,rgba(34,197,94,.86),rgba(6,182,212,.88))!important;color:#05202f!important;font-size:12px!important;font-weight:1000!important;box-shadow:0 0 0 4px rgba(34,197,94,.10),0 0 26px rgba(34,197,94,.24)!important;z-index:3!important}
+.world-link{position:absolute!important;height:2px!important;transform-origin:left center!important;background:linear-gradient(90deg,rgba(34,197,94,.55),rgba(56,189,248,.10))!important;opacity:.45!important;z-index:1!important}.world-link.offline{background:linear-gradient(90deg,rgba(239,68,68,.58),rgba(244,114,182,.12))!important}
+.world-pin{position:absolute!important;transform:translate(-50%,-50%)!important;display:flex!important;align-items:center!important;gap:6px!important;z-index:4!important}
+.world-pin i{display:block!important;width:10px!important;height:10px!important;border-radius:50%!important;background:#22c55e!important;box-shadow:0 0 0 4px rgba(34,197,94,.12),0 0 18px rgba(34,197,94,.34)!important;animation:nodePulse 1.8s ease-in-out infinite!important}.world-pin.offline i{background:#fb7185!important;box-shadow:0 0 0 4px rgba(251,113,133,.12),0 0 18px rgba(251,113,133,.34)!important}
+.world-pin b{display:none!important;white-space:nowrap!important;font-size:10.5px!important;padding:3px 6px!important;border-radius:999px!important;background:rgba(2,6,23,.72)!important;color:#f8fafc!important;border:1px solid rgba(255,255,255,.14)!important}
+.world-pin:hover b{display:inline-block!important}
+.map-empty{position:absolute!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;padding:10px 14px!important;border-radius:12px!important;background:rgba(255,255,255,.12)!important;color:#fff!important;font-weight:900!important}
+@keyframes worldSweep{from{transform:translate(-50%,-50%) rotate(0deg)}to{transform:translate(-50%,-50%) rotate(360deg)}}
+@keyframes nodePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.22)}}
+@media(max-width:980px){.world-radar{height:250px!important}.scan-ring.ring3,.scan-beam{width:200px!important;height:200px!important}.scan-ring.ring2{width:120px!important;height:120px!important}}
+/* ===== end final readability + world radar patch ===== */
+'''
+
+
+def _apply_final_title_map_patch():
+    global BASE, DASH, SERVERS, FORM, LOCAL, EVENTS, SETTINGS, DETAIL
+    if 'final readability + world radar patch' not in BASE:
+        BASE = BASE.replace('</style><script>', _FINAL_TITLE_MAP_CSS + '</style><script>')
+    DASH = re.sub(r'<div class=top><h1>.*?</h1><div class=btns>', '<div class=top><h1><span class="title-emoji">📊🌈</span><span class="title-text">霓虹风监控大屏</span><span class="title-chip" data-neon-live>正在连接0刷新</span></h1><div class=btns>', DASH, count=1)
+    SERVERS = re.sub(r'<div class=top><h1>.*?</h1><div class=btns>', '<div class=top><h1><span class="title-emoji">🖥️✨</span><span class="title-text">所有服务器</span></h1><div class=btns>', SERVERS, count=1)
+    FORM = FORM.replace("<div class=top><h1>{{'➕' if is_add else '✏️'}} {{action}}</h1>", '<div class=top><h1><span class="title-emoji">{{\'➕\' if is_add else \'✏️\'}}</span><span class="title-text">{{action}}</span></h1>')
+    LOCAL = LOCAL.replace('<div class=top><h1>🏠 本机面板</h1>', '<div class=top><h1><span class="title-emoji">🏠</span><span class="title-text">本机面板</span></h1>')
+    EVENTS = EVENTS.replace('<div class=top><h1>🧾✨ 事件记录</h1>', '<div class=top><h1><span class="title-emoji">🧾✨</span><span class="title-text">事件记录</span></h1>')
+    SETTINGS = SETTINGS.replace('<div class=top><h1>⚙️✨ 系统设置</h1>', '<div class=top><h1><span class="title-emoji">⚙️✨</span><span class="title-text">系统设置</span></h1>')
+    DETAIL = DETAIL.replace('<div class=top><h1>🖥️ {{flag_icon(s)|safe}} {{s.name}}</h1>', '<div class=top><h1><span class="title-emoji">🖥️</span><span class="title-text">{{flag_icon(s)|safe}} {{s.name}}</span></h1>')
+    app.jinja_env.globals.update(expire_progress_html=expire_progress_html, expire_progress_info=expire_progress_info, node_topology_html=node_topology_html, ops_feature_panel=ops_feature_panel)
+
+
+_apply_final_title_map_patch()
+# ===== END FINAL USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
