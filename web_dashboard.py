@@ -3609,4 +3609,159 @@ def _apply_clean_metric_rows_patch():
 _apply_clean_metric_rows_patch()
 # ===== END USER PATCH =====
 
+
+# ===== USER PATCH: metric rows inline left-right, transparent background only =====
+_INLINE_METRIC_ROWS_CSS = r"""
+/* ===== metric rows inline left-right, no inner background ===== */
+.metric-extra{
+  display:block!important;
+  margin:8px 0 0!important;
+  padding:0!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+}
+.metric-extra .mini{
+  display:grid!important;
+  grid-template-columns:52px minmax(0,1fr)!important;
+  align-items:center!important;
+  column-gap:10px!important;
+  row-gap:0!important;
+  width:100%!important;
+  min-width:0!important;
+  min-height:0!important;
+  height:auto!important;
+  margin:0 0 5px!important;
+  padding:0!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+}
+.metric-extra .mini b{
+  grid-column:1!important;
+  display:block!important;
+  width:auto!important;
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+  background:transparent!important;
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  font-size:12px!important;
+  line-height:1.28!important;
+  font-weight:1000!important;
+  white-space:nowrap!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.65)!important;
+}
+.metric-extra .mini > span{
+  grid-column:2!important;
+  display:block!important;
+  width:100%!important;
+  min-width:0!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  line-height:1.28!important;
+  font-size:11.2px!important;
+  font-weight:950!important;
+  letter-spacing:-.45px!important;
+  font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum" 1!important;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  box-shadow:none!important;
+  text-align:left!important;
+}
+.metric-extra .mini .m-up{
+  display:inline!important;
+  color:#34d399!important;
+  -webkit-text-fill-color:#34d399!important;
+  margin-right:10px!important;
+}
+.metric-extra .mini .m-down{
+  display:inline!important;
+  color:#38bdf8!important;
+  -webkit-text-fill-color:#38bdf8!important;
+}
+.metric-extra .mini .m-load{
+  display:inline!important;
+  color:#a78bfa!important;
+  -webkit-text-fill-color:#a78bfa!important;
+}
+.metric-extra .mini .m-sep{
+  display:inline!important;
+  color:#fbbf24!important;
+  -webkit-text-fill-color:#fbbf24!important;
+}
+.metric-extra .mini .m-ok{
+  color:#34d399!important;
+  -webkit-text-fill-color:#34d399!important;
+}
+.metric-extra .mini .m-warn{
+  color:#fbbf24!important;
+  -webkit-text-fill-color:#fbbf24!important;
+}
+.metric-extra .ai-mini{
+  grid-template-columns:86px minmax(0,1fr)!important;
+  margin-top:7px!important;
+  padding-top:6px!important;
+  border-top:1px solid rgba(255,255,255,.16)!important;
+}
+.metric-extra .ai-mini > span,
+[data-ai],[data-local-ai]{
+  white-space:normal!important;
+  overflow:visible!important;
+  line-height:1.35!important;
+  font-size:11.2px!important;
+  font-weight:950!important;
+  color:#f0abfc!important;
+  -webkit-text-fill-color:#f0abfc!important;
+  text-shadow:0 1px 2px rgba(0,0,0,.42)!important;
+}
+html.light .metric-extra .mini b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
+html.light .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
+html.light .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
+html.light .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
+html.light .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
+html.light .metric-extra .ai-mini > span,
+html.light [data-ai],html.light [data-local-ai]{
+  color:#7e22ce!important;
+  -webkit-text-fill-color:#7e22ce!important;
+  text-shadow:none!important;
+}
+@media(max-width:420px){
+  .metric-extra .mini{grid-template-columns:44px minmax(0,1fr)!important;column-gap:7px!important}
+  .metric-extra .ai-mini{grid-template-columns:74px minmax(0,1fr)!important}
+  .metric-extra .mini > span{font-size:10px!important;letter-spacing:-.65px!important}
+  .metric-extra .mini .m-up{margin-right:6px!important}
+}
+/* ===== end metric rows inline left-right, no inner background ===== */
+"""
+
+def _apply_inline_metric_rows_patch():
+    global BASE
+    if 'metric rows inline left-right, no inner background' not in BASE:
+        BASE = BASE.replace('</style><script>', _INLINE_METRIC_ROWS_CSS + '</style><script>')
+
+_apply_inline_metric_rows_patch()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
