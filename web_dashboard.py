@@ -2462,7 +2462,7 @@ def ops_radar_html(servers):
     return f'''<div class="card ops-card radar-card {cls}"><h2>🛰️ 运维攻击流量雷达图</h2><div class="radar" style="--risk:{risk:.0f}%"><span>{risk:.0f}</span></div><div class="radar-legend"><b>离线 {offline}/{total}</b><b>CPU {cpu:.0f}%</b><b>内存 {mem:.0f}%</b><b>TCP {tcp}</b></div><p class="small">基于离线率、资源峰值、TCP 连接数做运维风险雷达判断。</p></div>'''
 
 def ops_feature_panel(servers):
-    return '''<div class="card ops-card feature-card"><h2>🔥 Komari 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全国节点地图拓扑</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'''
+    return '''<div class="card ops-card feature-card"><h2>🔥 路西法 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全国节点地图拓扑</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'''
 
 def _live_payload():
     init_db()
@@ -2775,7 +2775,7 @@ def node_topology_html(servers):
 
 
 def ops_feature_panel(servers):
-    return '<div class="card ops-card feature-card"><h2>🔥 Komari 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全球节点雷达地图</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'
+    return '<div class="card ops-card feature-card"><h2>🔥 路西法 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全球节点雷达地图</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'
 
 
 _FINAL_TITLE_MAP_CSS = r'''
@@ -4984,6 +4984,204 @@ def _apply_compact_cards_view_fix():
     SERVERS = _replace_compact_block(SERVERS)
 
 _apply_compact_cards_view_fix()
+# ===== END USER PATCH =====
+
+
+# ===== USER PATCH: compact view independent expand, no top-right circle mark =====
+_COMPACT_INDEPENDENT_EXPAND_CSS = r"""
+/* ===== compact independent expand, no top-right info circle ===== */
+.compact-mini-card .compact-info{display:none!important}
+.compact-mini-card .compact-top{justify-content:flex-start!important}
+.compact-mini-card .compact-detail{
+  margin-top:10px!important;
+  padding-top:10px!important;
+  border-top:1px solid rgba(15,23,42,.18)!important;
+  display:block!important;
+}
+.compact-mini-card .compact-detail.hidden{display:none!important}
+.compact-detail-panel{
+  display:grid!important;
+  gap:9px!important;
+}
+.compact-detail-section{
+  padding:8px 9px!important;
+  border-radius:12px!important;
+  border:1px solid rgba(15,23,42,.12)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.28),rgba(255,255,255,.12))!important;
+}
+.compact-detail-section h4{
+  margin:0 0 6px!important;
+  font-size:12px!important;
+  line-height:1.25!important;
+  font-weight:1000!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+}
+.compact-detail-section .compact-detail-line{
+  display:flex!important;
+  justify-content:space-between!important;
+  gap:8px!important;
+  margin:3px 0!important;
+  font-size:12px!important;
+  line-height:1.35!important;
+  font-weight:900!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+}
+.compact-detail-section .compact-detail-line b{
+  color:#334155!important;
+  -webkit-text-fill-color:#334155!important;
+  font-weight:1000!important;
+}
+.compact-detail-section .compact-detail-line span{
+  text-align:right!important;
+  min-width:0!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+}
+.compact-detail-section .metric-extra{
+  margin-top:4px!important;
+}
+.compact-detail-section .metric-extra .mini{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+}
+.compact-mini-card .compact-detail-actions{
+  display:flex!important;
+  justify-content:flex-end!important;
+  gap:7px!important;
+  margin-top:8px!important;
+}
+.compact-mini-card .compact-detail-actions button,
+.compact-mini-card .compact-detail-actions .btn{
+  padding:5px 8px!important;
+  font-size:12px!important;
+  border-radius:9px!important;
+}
+html.light .compact-mini-card .compact-detail{
+  border-top-color:rgba(37,99,235,.13)!important;
+}
+html.light .compact-detail-section{
+  border-color:rgba(37,99,235,.12)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.62),rgba(219,234,254,.38))!important;
+}
+.compact-mini-card .compact-actions button[data-compact-toggle]{
+  min-width:46px!important;
+}
+/* ===== end compact independent expand ===== */
+"""
+
+_COMPACT_INDEPENDENT_EXPAND_JS = r"""
+<script>
+(function(){
+  window.toggleCompactDetail=function(id){
+    document.querySelectorAll('[data-compact-detail="'+id+'"]').forEach(function(panel){
+      panel.classList.toggle('hidden');
+    });
+    var panel=document.querySelector('[data-compact-detail="'+id+'"]');
+    var open=panel && !panel.classList.contains('hidden');
+    document.querySelectorAll('[data-compact-toggle="'+id+'"]').forEach(function(btn){
+      btn.textContent=open?'收回':'展开';
+    });
+  };
+})();
+</script>
+"""
+
+def _compact_cards_view_html_independent():
+    return """<div data-view-compact class="hidden compact-list compact-cardgrid-view">{% for s in data.servers %}{% set m=s.metrics %}
+<div class="compact-server compact-mini-card {{server_card_class(s)}}">
+  <div class="compact-top">
+    <div class="compact-title">{{flag_icon(s)|safe}}<span data-live-dot="{{s.id}}" class="dot {{'online' if s.online else 'offline'}}"></span><span class="name">{{s.name}}</span></div>
+  </div>
+  <div class="compact-tags">
+    <span class="mini-tag {{status_color_class_by_days(s)}}">{{display_price_label(s)}}</span>
+    <span class="mini-tag {{status_color_class_by_days(s)}}">{{display_expire_label(s)}}</span>
+  </div>
+  <div class="compact-divider"></div>
+  <div class="compact-stat-row">
+    <div class="compact-stat">⚙️ <span data-cputxt="{{s.id}}">{{'%.0f'|format(m.cpu_percent or 0)}}%</span></div>
+    <div class="compact-stat">▰ <span data-memtxt="{{s.id}}">{{'%.0f'|format(m.mem_percent or 0)}}%</span></div>
+    <div class="compact-stat">▣ <span data-disktxt="{{s.id}}">{{'%.0f'|format(m.disk_percent or 0)}}%</span></div>
+    <div class="compact-stat">⚡ {{'%.2f'|format(m.load1 or 0)}} | {{'%.2f'|format(m.load5 or 0)}} | {{'%.2f'|format(m.load15 or 0)}}</div>
+  </div>
+  <div class="compact-net-row">
+    <span><b>⌁</b><span data-netspeed="{{s.id}}">↑ 0B/s<br>↓ 0B/s</span></span>
+    <span><b>↕</b><span data-traffic="{{s.id}}">↑ 0B<br>↓ 0B</span></span>
+  </div>
+  <div class="compact-foot">
+    <span>到期：{{display_expire_label(s)}}</span>
+    <span>{% if s.online %}在线：<span data-uptime="{{s.id}}">{{duration(m.uptime_seconds or 0)}}</span>{% else %}离线{% endif %}</span>
+  </div>
+  <div class="compact-detail hidden" data-compact-detail="{{s.id}}">
+    <div class="compact-detail-panel">
+      <div class="compact-detail-section">
+        <h4>🧾 基础信息</h4>
+        <div class="compact-detail-line"><b>ID</b><span>{{s.id}}</span></div>
+        <div class="compact-detail-line"><b>主机</b><span>{{s.host}}:{{s.check_port}}</span></div>
+        <div class="compact-detail-line"><b>地区</b><span>{{s.location_cn or s.location}}</span></div>
+        <div class="compact-detail-line"><b>系统</b><span>{{s.os_name or '未知系统'}}</span></div>
+      </div>
+      <div class="compact-detail-section">
+        <h4>📊 资源</h4>
+        {{progress_row('CPU',s.id,'cpu',m.cpu_percent or 0,s.cpu_alert or 90)|safe}}
+        {{progress_row('内存',s.id,'mem',m.mem_percent or 0,s.mem_alert or 90)|safe}}
+        {{progress_row('SWAP',s.id,'swap',m.swap_percent or 0,80)|safe}}
+        {{progress_row('硬盘',s.id,'disk',m.disk_percent or 0,s.disk_alert or 90)|safe}}
+      </div>
+      <div class="compact-detail-section">
+        <h4>🛰️ 扩展监控</h4>
+        <div class="metric-extra">
+          <div class="mini"><b>GPU</b><span data-gpu="{{s.id}}">{{metric_gpu_html(m)|safe}}</span></div>
+          <div class="mini"><b>IO</b><span data-io="{{s.id}}">{{metric_io_html(m)|safe}}</span></div>
+          <div class="mini"><b>TCP</b><span data-tcp="{{s.id}}">{{metric_tcp_html(m)|safe}}</span></div>
+        </div>
+      </div>
+      <div class="compact-detail-section">
+        <h4>🤖 AI 故障判断</h4>
+        <div data-ai="{{s.id}}">{{ai_fault_html(s)}}</div>
+      </div>
+      <div class="compact-detail-section">
+        <h4>📝 备注</h4>
+        <div class=small>{{s.note or '无备注'}}｜数据：{{m.updated_at or '未知'}}</div>
+      </div>
+    </div>
+  </div>
+  <div class="compact-actions">
+    <button type=button data-compact-toggle="{{s.id}}" onclick="toggleCompactDetail('{{s.id}}')">展开</button>
+    <a class=btn href="/servers/{{s.id}}">详情</a>
+  </div>
+</div>{% else %}<div class=card>📭 暂无服务器</div>{% endfor %}</div>"""
+
+def _replace_compact_block_independent(template):
+    new_block = _compact_cards_view_html_independent()
+    # 兼容此前两种紧凑视图块
+    template = re.sub(
+        r'<div data-view-compact class="hidden compact-list compact-cardgrid-view">.*?(?=<div data-view-table class=hidden>)',
+        new_block,
+        template,
+        count=1,
+        flags=re.S
+    )
+    template = re.sub(
+        r'<div data-view-compact class="hidden compact-list">.*?(?=<div data-view-table class=hidden>)',
+        new_block,
+        template,
+        count=1,
+        flags=re.S
+    )
+    return template
+
+def _apply_compact_independent_expand_patch():
+    global BASE, DASH, SERVERS
+    if 'compact independent expand, no top-right info circle' not in BASE:
+        BASE = BASE.replace('</style><script>', _COMPACT_INDEPENDENT_EXPAND_CSS + '</style><script>')
+    if 'toggleCompactDetail' not in BASE:
+        BASE = BASE.replace('</body></html>', _COMPACT_INDEPENDENT_EXPAND_JS + '</body></html>')
+    DASH = _replace_compact_block_independent(DASH)
+    SERVERS = _replace_compact_block_independent(SERVERS)
+
+_apply_compact_independent_expand_patch()
 # ===== END USER PATCH =====
 
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
