@@ -2462,7 +2462,7 @@ def ops_radar_html(servers):
     return f'''<div class="card ops-card radar-card {cls}"><h2>🛰️ 运维攻击流量雷达图</h2><div class="radar" style="--risk:{risk:.0f}%"><span>{risk:.0f}</span></div><div class="radar-legend"><b>离线 {offline}/{total}</b><b>CPU {cpu:.0f}%</b><b>内存 {mem:.0f}%</b><b>TCP {tcp}</b></div><p class="small">基于离线率、资源峰值、TCP 连接数做运维风险雷达判断。</p></div>'''
 
 def ops_feature_panel(servers):
-    return '''<div class="card ops-card feature-card"><h2>🔥 Komari 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全国节点地图拓扑</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'''
+    return '''<div class="card ops-card feature-card"><h2>🔥 路西法 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全国节点地图拓扑</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'''
 
 def _live_payload():
     init_db()
@@ -2775,7 +2775,7 @@ def node_topology_html(servers):
 
 
 def ops_feature_panel(servers):
-    return '<div class="card ops-card feature-card"><h2>🔥 Komari 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全球节点雷达地图</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'
+    return '<div class="card ops-card feature-card"><h2>🔥 路西法 级霓虹监控能力</h2><div class="feature-grid"><span>1. WebSocket / SSE 0刷新</span><span>2. GPU / IO / TCP 连接监控</span><span>3. 全球节点雷达地图</span><span>4. 攻击流量雷达图</span><span>5. AI 自动判断故障原因</span></div></div>'
 
 
 _FINAL_TITLE_MAP_CSS = r'''
@@ -3196,217 +3196,250 @@ _apply_final_inline_clean_patch()
 # ===== END FINAL CLEAN PATCH =====
 
 
-# ===== USER PATCH: make metric rows truly transparent + fix AI row spacing =====
-_TRANSPARENT_METRIC_ROWS_CSS = r"""
-/* ===== truly transparent metric rows + readable AI row ===== */
-html body .servercard .metric-extra,
-html body .servercard .metric-extra *,
-html body .card .metric-extra,
-html body .card .metric-extra *,
+# ===== USER PATCH: AI card layout + map/radar follow light/dark/solid/glass themes =====
+_AI_MAP_THEME_CSS = r"""
+/* ===== AI card layout + themed map/radar backgrounds ===== */
+
+/* 普通指标行仍然不带独立背景，只融合在服务器卡片里 */
 html body .metric-extra,
-html body .metric-extra *{
+html body .metric-extra .mini:not(.ai-mini),
+html body .metric-extra .mini:not(.ai-mini):nth-child(1),
+html body .metric-extra .mini:not(.ai-mini):nth-child(2),
+html body .metric-extra .mini:not(.ai-mini):nth-child(3),
+html body .metric-extra .mini:not(.ai-mini):nth-child(4),
+html body .metric-extra .mini:not(.ai-mini):nth-child(5),
+html body .metric-extra .mini:not(.ai-mini):nth-child(6){
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  border:0!important;
   box-shadow:none!important;
 }
 
-html body .servercard .metric-extra,
-html body .card .metric-extra,
-html body .metric-extra{
-  background:transparent!important;
-  background-color:transparent!important;
-  background-image:none!important;
-  border:0!important;
-  outline:0!important;
-  padding:0!important;
-  margin-top:8px!important;
-  overflow:visible!important;
-}
-
-html body .servercard .metric-extra .mini,
-html body .servercard .metric-extra .mini:nth-child(1),
-html body .servercard .metric-extra .mini:nth-child(2),
-html body .servercard .metric-extra .mini:nth-child(3),
-html body .servercard .metric-extra .mini:nth-child(4),
-html body .servercard .metric-extra .mini:nth-child(5),
-html body .servercard .metric-extra .mini:nth-child(6),
-html body .servercard .metric-extra .mini:nth-child(7),
-html body .card .metric-extra .mini,
-html body .card .metric-extra .mini:nth-child(1),
-html body .card .metric-extra .mini:nth-child(2),
-html body .card .metric-extra .mini:nth-child(3),
-html body .card .metric-extra .mini:nth-child(4),
-html body .card .metric-extra .mini:nth-child(5),
-html body .card .metric-extra .mini:nth-child(6),
-html body .card .metric-extra .mini:nth-child(7),
-html body .metric-extra .mini{
-  display:grid!important;
-  grid-template-columns:48px minmax(0,1fr)!important;
-  align-items:center!important;
-  column-gap:9px!important;
-  width:100%!important;
-  min-width:0!important;
-  height:auto!important;
-  min-height:0!important;
-  margin:0 0 6px!important;
-  padding:0!important;
-  border:0!important;
-  outline:0!important;
-  border-radius:0!important;
-  background:transparent!important;
-  background-color:transparent!important;
-  background-image:none!important;
-  backdrop-filter:none!important;
-  -webkit-backdrop-filter:none!important;
-  overflow:visible!important;
-}
-
-html body .metric-extra .mini::before,
-html body .metric-extra .mini::after,
-html body .metric-extra .mini > span::before,
-html body .metric-extra .mini > span::after{
-  content:none!important;
-  display:none!important;
-  background:transparent!important;
-  background-image:none!important;
-}
-
-html body .metric-extra .mini b{
-  grid-column:1!important;
-  display:block!important;
-  margin:0!important;
-  padding:0!important;
-  white-space:nowrap!important;
-  background:transparent!important;
-  background-color:transparent!important;
-  background-image:none!important;
-  border:0!important;
-  color:#ffffff!important;
-  -webkit-text-fill-color:#ffffff!important;
-  font-size:12px!important;
-  line-height:1.25!important;
-  font-weight:1000!important;
-  text-shadow:0 1px 3px rgba(0,0,0,.72)!important;
-}
-
-html body .metric-extra .mini > span{
-  grid-column:2!important;
-  display:block!important;
-  min-width:0!important;
-  width:100%!important;
-  margin:0!important;
-  padding:0!important;
-  white-space:nowrap!important;
-  overflow:visible!important;
-  text-overflow:clip!important;
-  background:transparent!important;
-  background-color:transparent!important;
-  background-image:none!important;
-  border:0!important;
-  font-size:11px!important;
-  line-height:1.28!important;
-  font-weight:950!important;
-  letter-spacing:-.45px!important;
-  font-variant-numeric:tabular-nums!important;
-  font-feature-settings:"tnum" 1!important;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
-}
-
-/* AI 单独加宽标签并允许内容换行，避免“AI 故障判断”和判断文字挤在一起 */
+/* AI 故障判断：标题在上，数据在下，透明卡片式，不再挤压 */
 html body .metric-extra .ai-mini,
 html body .servercard .metric-extra .ai-mini,
 html body .card .metric-extra .ai-mini{
-  grid-template-columns:86px minmax(0,1fr)!important;
-  align-items:start!important;
-  column-gap:10px!important;
-  margin-top:9px!important;
-  padding-top:8px!important;
-  border-top:1px solid rgba(255,255,255,.13)!important;
-  background:transparent!important;
-  background-color:transparent!important;
-  background-image:none!important;
+  display:block!important;
+  grid-template-columns:none!important;
+  width:100%!important;
+  margin:10px 0 0!important;
+  padding:9px 10px!important;
+  border-radius:14px!important;
+  border:1px solid rgba(125,211,252,.22)!important;
+  background:linear-gradient(135deg,rgba(34,211,238,.12),rgba(96,165,250,.08),rgba(52,211,153,.08))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 8px 24px rgba(14,165,233,.08)!important;
+  overflow:visible!important;
 }
-
 html body .metric-extra .ai-mini b{
+  display:block!important;
+  width:100%!important;
+  margin:0 0 5px!important;
+  padding:0!important;
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  font-size:12px!important;
+  line-height:1.25!important;
+  font-weight:1000!important;
   white-space:nowrap!important;
-  font-size:11.5px!important;
-  line-height:1.35!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
 }
-
 html body .metric-extra .ai-mini > span,
 html body [data-ai],
 html body [data-local-ai]{
+  display:block!important;
+  width:100%!important;
   white-space:normal!important;
   word-break:break-word!important;
   overflow:visible!important;
-  line-height:1.42!important;
+  line-height:1.45!important;
   font-size:11.5px!important;
   letter-spacing:0!important;
   font-weight:950!important;
   color:transparent!important;
   -webkit-text-fill-color:transparent!important;
   background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
-  background-image:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
   -webkit-background-clip:text!important;
   background-clip:text!important;
   text-shadow:none!important;
 }
 
-/* 数据颜色继续保留 */
-html body .metric-extra .mini .m-up{display:inline!important;color:#34d399!important;-webkit-text-fill-color:#34d399!important;margin-right:8px!important}
-html body .metric-extra .mini .m-down{display:inline!important;color:#38bdf8!important;-webkit-text-fill-color:#38bdf8!important}
-html body .metric-extra .mini .m-load{display:inline!important;color:#a78bfa!important;-webkit-text-fill-color:#a78bfa!important}
-html body .metric-extra .mini .m-sep{display:inline!important;color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
-html body .metric-extra .mini .m-ok{color:#34d399!important;-webkit-text-fill-color:#34d399!important}
-html body .metric-extra .mini .m-warn{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
-
-html.light body .metric-extra .mini b{
+/* 日间模式 AI 卡片 */
+html.light body .metric-extra .ai-mini{
+  border-color:rgba(37,99,235,.16)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.62),rgba(219,234,254,.44),rgba(240,253,250,.38))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.78),0 8px 22px rgba(37,99,235,.08)!important;
+}
+html.light body .metric-extra .ai-mini b{
   color:#0f172a!important;
   -webkit-text-fill-color:#0f172a!important;
   text-shadow:none!important;
 }
-html.light body .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light body .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
-html.light body .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
-html.light body .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
-html.light body .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
-html.light body .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
-html.light body .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
-
-@media(max-width:420px){
-  html body .metric-extra .mini{grid-template-columns:42px minmax(0,1fr)!important;column-gap:6px!important}
-  html body .metric-extra .ai-mini{grid-template-columns:80px minmax(0,1fr)!important}
-  html body .metric-extra .mini > span{font-size:10px!important;letter-spacing:-.6px!important}
+html.light body .metric-extra .ai-mini > span,
+html.light body [data-ai],
+html.light body [data-local-ai]{
+  background:linear-gradient(90deg,#0369a1,#2563eb,#7c3aed,#059669)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  -webkit-text-fill-color:transparent!important;
 }
-/* ===== end truly transparent metric rows ===== */
+
+/* 实色背景模式 AI 卡片稍微实一点，透明玻璃模式保持轻透 */
+html.solid body .metric-extra .ai-mini,
+body.solid .metric-extra .ai-mini{
+  background:linear-gradient(135deg,rgba(15,23,42,.52),rgba(30,41,59,.36),rgba(14,116,144,.20))!important;
+  border-color:rgba(125,211,252,.24)!important;
+}
+html.light.solid body .metric-extra .ai-mini,
+body.light.solid .metric-extra .ai-mini{
+  background:linear-gradient(135deg,rgba(255,255,255,.90),rgba(239,246,255,.82),rgba(236,253,245,.72))!important;
+  border-color:rgba(37,99,235,.15)!important;
+}
+
+/* 地图和雷达：不再固定黑底，跟随夜间/日间、实色/玻璃模式 */
+html body .world-radar,
+html body .topology-map{
+  background:
+    radial-gradient(circle at 73% 43%,rgba(34,197,94,.14),transparent 11%),
+    radial-gradient(circle at 35% 42%,rgba(56,189,248,.10),transparent 36%),
+    linear-gradient(135deg,rgba(15,23,42,.36),rgba(30,64,175,.22),rgba(14,116,144,.16))!important;
+  border-color:rgba(255,255,255,.20)!important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.05),0 14px 36px rgba(14,116,144,.12)!important;
+}
+html.light body .world-radar,
+html.light body .topology-map{
+  background:
+    radial-gradient(circle at 73% 43%,rgba(34,197,94,.17),transparent 12%),
+    radial-gradient(circle at 35% 42%,rgba(56,189,248,.18),transparent 36%),
+    linear-gradient(135deg,rgba(255,255,255,.70),rgba(219,234,254,.58),rgba(224,242,254,.42))!important;
+  border-color:rgba(37,99,235,.14)!important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.70),0 14px 32px rgba(37,99,235,.10)!important;
+}
+html.solid body .world-radar,
+body.solid .world-radar,
+html.solid body .topology-map,
+body.solid .topology-map{
+  background:
+    radial-gradient(circle at 73% 43%,rgba(34,197,94,.12),transparent 11%),
+    radial-gradient(circle at 35% 42%,rgba(56,189,248,.09),transparent 34%),
+    linear-gradient(135deg,rgba(15,23,42,.76),rgba(30,41,59,.70),rgba(12,74,110,.42))!important;
+  border-color:rgba(148,163,184,.20)!important;
+}
+html.light.solid body .world-radar,
+body.light.solid .world-radar,
+html.light.solid body .topology-map,
+body.light.solid .topology-map{
+  background:
+    radial-gradient(circle at 73% 43%,rgba(34,197,94,.16),transparent 12%),
+    radial-gradient(circle at 35% 42%,rgba(56,189,248,.15),transparent 36%),
+    linear-gradient(135deg,rgba(255,255,255,.94),rgba(239,246,255,.86),rgba(224,242,254,.70))!important;
+}
+
+/* 世界地图轮廓也跟随日夜颜色 */
+html body .world-outline path,
+html body .world-outline polygon,
+html body .world-outline .landmass{
+  fill:rgba(96,165,250,.16)!important;
+  stroke:rgba(191,219,254,.42)!important;
+}
+html.light body .world-outline path,
+html.light body .world-outline polygon,
+html.light body .world-outline .landmass{
+  fill:rgba(59,130,246,.16)!important;
+  stroke:rgba(37,99,235,.30)!important;
+}
+html.solid body .world-outline path,
+html.solid body .world-outline polygon,
+body.solid .world-outline path,
+body.solid .world-outline polygon{
+  fill:rgba(96,165,250,.13)!important;
+  stroke:rgba(148,163,184,.42)!important;
+}
+html.light.solid body .world-outline path,
+html.light.solid body .world-outline polygon,
+body.light.solid .world-outline path,
+body.light.solid .world-outline polygon{
+  fill:rgba(59,130,246,.14)!important;
+  stroke:rgba(30,64,175,.28)!important;
+}
+
+/* 攻击流量雷达圆圈和中间数字：跟随主题，不再黑底 */
+html body .radar{
+  background:
+    conic-gradient(#22c55e var(--risk),rgba(255,255,255,.16) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(191,219,254,.18) 22px 23px),
+    radial-gradient(circle,rgba(15,23,42,.25),rgba(14,116,144,.12))!important;
+  box-shadow:0 0 28px rgba(34,197,94,.18)!important;
+}
+html body .radar span{
+  background:linear-gradient(135deg,rgba(15,23,42,.36),rgba(14,116,144,.24))!important;
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  text-shadow:0 1px 4px rgba(0,0,0,.48)!important;
+}
+html.light body .radar{
+  background:
+    conic-gradient(#16a34a var(--risk),rgba(37,99,235,.12) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.18) 22px 23px),
+    radial-gradient(circle,rgba(255,255,255,.82),rgba(219,234,254,.50))!important;
+  box-shadow:0 0 24px rgba(37,99,235,.14)!important;
+}
+html.light body .radar span{
+  background:linear-gradient(135deg,rgba(255,255,255,.86),rgba(219,234,254,.66))!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.solid body .radar,
+body.solid .radar{
+  background:
+    conic-gradient(#22c55e var(--risk),rgba(148,163,184,.16) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(148,163,184,.18) 22px 23px),
+    radial-gradient(circle,rgba(15,23,42,.78),rgba(30,41,59,.54))!important;
+}
+html.light.solid body .radar,
+body.light.solid .radar{
+  background:
+    conic-gradient(#16a34a var(--risk),rgba(37,99,235,.10) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.15) 22px 23px),
+    radial-gradient(circle,rgba(255,255,255,.94),rgba(239,246,255,.80))!important;
+}
+html.solid body .radar span,
+body.solid .radar span{
+  background:linear-gradient(135deg,rgba(15,23,42,.78),rgba(30,41,59,.58))!important;
+}
+html.light.solid body .radar span,
+body.light.solid .radar span{
+  background:linear-gradient(135deg,rgba(255,255,255,.94),rgba(239,246,255,.78))!important;
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+}
+
+/* 雷达图例也跟随主题 */
+html.light body .radar-legend b{
+  background:rgba(255,255,255,.58)!important;
+  color:#0f172a!important;
+}
+html body .radar-legend b{
+  background:rgba(255,255,255,.10)!important;
+}
+html.light.solid body .radar-legend b,
+body.light.solid .radar-legend b{
+  background:rgba(255,255,255,.82)!important;
+}
+html.solid body .radar-legend b,
+body.solid .radar-legend b{
+  background:rgba(15,23,42,.34)!important;
+}
+/* ===== end AI card layout + themed map/radar backgrounds ===== */
 """
 
-_TRANSPARENT_METRIC_ROWS_JS = r"""
-<script>
-(function(){
-  function clearMetricRowBackgrounds(){
-    document.querySelectorAll('.metric-extra,.metric-extra .mini').forEach(function(el){
-      el.style.setProperty('background','transparent','important');
-      el.style.setProperty('background-color','transparent','important');
-      el.style.setProperty('background-image','none','important');
-      el.style.setProperty('border','0','important');
-      el.style.setProperty('box-shadow','none','important');
-    });
-  }
-  document.addEventListener('DOMContentLoaded',function(){
-    clearMetricRowBackgrounds();
-    setInterval(clearMetricRowBackgrounds, 1800);
-  });
-})();
-</script>
-"""
-
-def _apply_transparent_metric_rows_patch():
+def _apply_ai_map_theme_patch():
     global BASE
-    if 'truly transparent metric rows' not in BASE:
-        BASE = BASE.replace('</style><script>', _TRANSPARENT_METRIC_ROWS_CSS + '</style><script>')
-    if 'clearMetricRowBackgrounds' not in BASE:
-        BASE = BASE.replace('</script></head><body>', '</script>' + _TRANSPARENT_METRIC_ROWS_JS + '</head><body>')
+    if 'AI card layout + themed map/radar backgrounds' not in BASE:
+        BASE = BASE.replace('</style><script>', _AI_MAP_THEME_CSS + '</style><script>')
 
-_apply_transparent_metric_rows_patch()
+_apply_ai_map_theme_patch()
 # ===== END USER PATCH =====
 
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
