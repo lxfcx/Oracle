@@ -4536,4 +4536,88 @@ def _apply_dom_lamp_ai_fix():
 _apply_dom_lamp_ai_fix()
 # ===== END DOM-LEVEL FIX ONLY =====
 
+
+# ===== LOCAL AI ONLY: make local AI fault text actually dynamic =====
+def _fmt_ai_speed(n):
+    try:
+        n = float(n or 0)
+    except Exception:
+        n = 0
+    units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s']
+    i = 0
+    while n >= 1024 and i < len(units) - 1:
+        n /= 1024.0
+        i += 1
+    if i == 0:
+        return f'{n:.0f}{units[i]}'
+    return f'{n:.2f}{units[i]}'
+
+def _local_ai_dynamic_text(j):
+    j = j or {}
+    cpu = _float(j.get('cpu'))
+    mem = _float(j.get('mem'))
+    disk = _float(j.get('disk'))
+    load1 = _float(j.get('load1'))
+    load5 = _float(j.get('load5'))
+    load15 = _float(j.get('load15'))
+    io_r = _int(j.get('io_read_speed'))
+    io_w = _int(j.get('io_write_speed'))
+    tcp_est = _int(j.get('tcp_established'))
+    tcp_listen = _int(j.get('tcp_listen'))
+    tcp_tw = _int(j.get('tcp_time_wait'))
+
+    risks = []
+    if cpu >= 90:
+        risks.append(f'CPU 高占用 {cpu:.0f}%')
+    elif cpu >= 70:
+        risks.append(f'CPU 偏高 {cpu:.0f}%')
+
+    if mem >= 90:
+        risks.append(f'内存高危 {mem:.0f}%')
+    elif mem >= 75:
+        risks.append(f'内存偏高 {mem:.0f}%')
+
+    if disk >= 90:
+        risks.append(f'磁盘空间高危 {disk:.0f}%')
+    elif disk >= 80:
+        risks.append(f'磁盘空间偏高 {disk:.0f}%')
+
+    if load1 >= 8 or load5 >= 8:
+        risks.append(f'负载偏高 {load1:.2f}/{load5:.2f}/{load15:.2f}')
+
+    if max(io_r, io_w) >= 50 * 1024 * 1024:
+        risks.append(f'IO 繁忙 R {_fmt_ai_speed(io_r)} / W {_fmt_ai_speed(io_w)}')
+
+    if tcp_est >= 1000:
+        risks.append(f'TCP 连接异常偏高 EST {tcp_est}')
+    elif tcp_est >= 300:
+        risks.append(f'TCP 连接偏高 EST {tcp_est}')
+
+    if risks:
+        result = '；'.join(risks[:3])
+        prefix = '本机风险：'
+    else:
+        result = '暂未发现明显故障特征'
+        prefix = '本机稳定：'
+
+    try:
+        t = now().split(' ')[-1]
+    except Exception:
+        t = ''
+
+    return (
+        f'{prefix}{result}。'
+        f'｜CPU {cpu:.0f}% / 内存 {mem:.0f}% / 磁盘 {disk:.0f}%'
+        f'｜IO R {_fmt_ai_speed(io_r)} W {_fmt_ai_speed(io_w)}'
+        f'｜TCP EST {tcp_est} LISTEN {tcp_listen} TW {tcp_tw}'
+        + (f'｜{t}' if t else '')
+    )
+
+_PREV_LOCAL_LIVE_JSON_FOR_DYNAMIC_AI = _local_live_json
+def _local_live_json():
+    j = _PREV_LOCAL_LIVE_JSON_FOR_DYNAMIC_AI()
+    j['ai_html'] = _local_ai_dynamic_text(j)
+    return j
+# ===== END LOCAL AI ONLY =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
