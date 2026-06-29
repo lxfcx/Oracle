@@ -3419,4 +3419,194 @@ def _apply_horizontal_metrics_patch():
 _apply_horizontal_metrics_patch()
 # ===== END USER PATCH =====
 
+
+# ===== USER PATCH: clean transparent metric rows, horizontal data, do not touch live lamp =====
+def _fmt_metric_unit_clean(n, suffix=''):
+    try:
+        n = float(n or 0)
+    except Exception:
+        return '0 B' + suffix
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    i = 0
+    while abs(n) >= 1024 and i < len(units) - 1:
+        n /= 1024.0
+        i += 1
+    if i == 0:
+        s = f'{n:.0f} {units[i]}'
+    else:
+        s = f'{n:.2f} {units[i]}'
+    return s + suffix
+
+def _metric_clean_up_down(up_value, down_value, suffix=''):
+    return (
+        f'<span class="m-up">↑ {_fmt_metric_unit_clean(up_value, suffix)}</span>'
+        f'<span class="m-down">↓ {_fmt_metric_unit_clean(down_value, suffix)}</span>'
+    )
+
+def _metric_clean_load(load1, load5, load15):
+    try: l1 = float(load1 or 0)
+    except Exception: l1 = 0.0
+    try: l5 = float(load5 or 0)
+    except Exception: l5 = 0.0
+    try: l15 = float(load15 or 0)
+    except Exception: l15 = 0.0
+    return f'<span class="m-load">{l1:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l5:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l15:.2f}</span>'
+
+_PREV_METRIC_JSON_FOR_CLEAN_ROWS = metric_json
+def metric_json(x):
+    j = _PREV_METRIC_JSON_FOR_CLEAN_ROWS(x)
+    j['net_speed_html'] = _metric_clean_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
+    j['traffic_html'] = _metric_clean_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
+    j['load_html'] = _metric_clean_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
+    return j
+
+_PREV_LOCAL_LIVE_JSON_FOR_CLEAN_ROWS = _local_live_json
+def _local_live_json():
+    j = _PREV_LOCAL_LIVE_JSON_FOR_CLEAN_ROWS()
+    j['net_speed_html'] = _metric_clean_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
+    j['traffic_html'] = _metric_clean_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
+    j['load_html'] = _metric_clean_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
+    return j
+
+_CLEAN_METRIC_ROWS_CSS = r"""
+/* ===== clean transparent metric rows; no extra boxes ===== */
+.metric-extra{
+  display:block!important;
+  margin:8px 0 0!important;
+  padding:0!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+}
+.metric-extra .mini{
+  display:block!important;
+  width:100%!important;
+  min-width:0!important;
+  min-height:0!important;
+  height:auto!important;
+  margin:0 0 7px!important;
+  padding:0!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+}
+.metric-extra .mini b{
+  display:block!important;
+  width:100%!important;
+  margin:0 0 2px!important;
+  padding:0!important;
+  border:0!important;
+  background:transparent!important;
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  font-size:12px!important;
+  line-height:1.25!important;
+  font-weight:1000!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.65)!important;
+}
+.metric-extra .mini > span{
+  display:block!important;
+  width:100%!important;
+  min-width:0!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  line-height:1.35!important;
+  font-size:11px!important;
+  font-weight:950!important;
+  letter-spacing:-.35px!important;
+  font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum" 1!important;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
+  background:transparent!important;
+  box-shadow:none!important;
+}
+.metric-extra .mini .m-up{
+  display:inline!important;
+  color:#34d399!important;
+  -webkit-text-fill-color:#34d399!important;
+  margin-right:12px!important;
+}
+.metric-extra .mini .m-down{
+  display:inline!important;
+  color:#38bdf8!important;
+  -webkit-text-fill-color:#38bdf8!important;
+}
+.metric-extra .mini .m-load{
+  display:inline!important;
+  color:#a78bfa!important;
+  -webkit-text-fill-color:#a78bfa!important;
+}
+.metric-extra .mini .m-sep{
+  display:inline!important;
+  color:#fbbf24!important;
+  -webkit-text-fill-color:#fbbf24!important;
+}
+.metric-extra .mini .m-ok{
+  color:#34d399!important;
+  -webkit-text-fill-color:#34d399!important;
+}
+.metric-extra .mini .m-warn{
+  color:#fbbf24!important;
+  -webkit-text-fill-color:#fbbf24!important;
+}
+.metric-extra .ai-mini{
+  margin-top:8px!important;
+  padding-top:7px!important;
+  border-top:1px solid rgba(255,255,255,.16)!important;
+}
+.metric-extra .ai-mini > span,
+[data-ai],[data-local-ai]{
+  white-space:normal!important;
+  overflow:visible!important;
+  line-height:1.38!important;
+  font-size:11.5px!important;
+  font-weight:950!important;
+  color:#f0abfc!important;
+  -webkit-text-fill-color:#f0abfc!important;
+  text-shadow:0 1px 2px rgba(0,0,0,.42)!important;
+}
+html.light .metric-extra .mini b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
+html.light .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
+html.light .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
+html.light .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
+html.light .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
+html.light .metric-extra .ai-mini > span,
+html.light [data-ai],html.light [data-local-ai]{
+  color:#7e22ce!important;
+  -webkit-text-fill-color:#7e22ce!important;
+  text-shadow:none!important;
+}
+@media(max-width:420px){
+  .metric-extra .mini > span{font-size:10.5px!important;letter-spacing:-.55px!important}
+  .metric-extra .mini .m-up{margin-right:8px!important}
+}
+/* ===== end clean transparent metric rows ===== */
+"""
+
+def _apply_clean_metric_rows_patch():
+    global BASE
+    if 'clean transparent metric rows' not in BASE:
+        BASE = BASE.replace('</style><script>', _CLEAN_METRIC_ROWS_CSS + '</style><script>')
+
+_apply_clean_metric_rows_patch()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
