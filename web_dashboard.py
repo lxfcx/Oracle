@@ -3195,4 +3195,218 @@ def _apply_final_inline_clean_patch():
 _apply_final_inline_clean_patch()
 # ===== END FINAL CLEAN PATCH =====
 
+
+# ===== USER PATCH: make metric rows truly transparent + fix AI row spacing =====
+_TRANSPARENT_METRIC_ROWS_CSS = r"""
+/* ===== truly transparent metric rows + readable AI row ===== */
+html body .servercard .metric-extra,
+html body .servercard .metric-extra *,
+html body .card .metric-extra,
+html body .card .metric-extra *,
+html body .metric-extra,
+html body .metric-extra *{
+  box-shadow:none!important;
+}
+
+html body .servercard .metric-extra,
+html body .card .metric-extra,
+html body .metric-extra{
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  border:0!important;
+  outline:0!important;
+  padding:0!important;
+  margin-top:8px!important;
+  overflow:visible!important;
+}
+
+html body .servercard .metric-extra .mini,
+html body .servercard .metric-extra .mini:nth-child(1),
+html body .servercard .metric-extra .mini:nth-child(2),
+html body .servercard .metric-extra .mini:nth-child(3),
+html body .servercard .metric-extra .mini:nth-child(4),
+html body .servercard .metric-extra .mini:nth-child(5),
+html body .servercard .metric-extra .mini:nth-child(6),
+html body .servercard .metric-extra .mini:nth-child(7),
+html body .card .metric-extra .mini,
+html body .card .metric-extra .mini:nth-child(1),
+html body .card .metric-extra .mini:nth-child(2),
+html body .card .metric-extra .mini:nth-child(3),
+html body .card .metric-extra .mini:nth-child(4),
+html body .card .metric-extra .mini:nth-child(5),
+html body .card .metric-extra .mini:nth-child(6),
+html body .card .metric-extra .mini:nth-child(7),
+html body .metric-extra .mini{
+  display:grid!important;
+  grid-template-columns:48px minmax(0,1fr)!important;
+  align-items:center!important;
+  column-gap:9px!important;
+  width:100%!important;
+  min-width:0!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:0 0 6px!important;
+  padding:0!important;
+  border:0!important;
+  outline:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+  overflow:visible!important;
+}
+
+html body .metric-extra .mini::before,
+html body .metric-extra .mini::after,
+html body .metric-extra .mini > span::before,
+html body .metric-extra .mini > span::after{
+  content:none!important;
+  display:none!important;
+  background:transparent!important;
+  background-image:none!important;
+}
+
+html body .metric-extra .mini b{
+  grid-column:1!important;
+  display:block!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  border:0!important;
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+  font-size:12px!important;
+  line-height:1.25!important;
+  font-weight:1000!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.72)!important;
+}
+
+html body .metric-extra .mini > span{
+  grid-column:2!important;
+  display:block!important;
+  min-width:0!important;
+  width:100%!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+  border:0!important;
+  font-size:11px!important;
+  line-height:1.28!important;
+  font-weight:950!important;
+  letter-spacing:-.45px!important;
+  font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum" 1!important;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
+}
+
+/* AI 单独加宽标签并允许内容换行，避免“AI 故障判断”和判断文字挤在一起 */
+html body .metric-extra .ai-mini,
+html body .servercard .metric-extra .ai-mini,
+html body .card .metric-extra .ai-mini{
+  grid-template-columns:86px minmax(0,1fr)!important;
+  align-items:start!important;
+  column-gap:10px!important;
+  margin-top:9px!important;
+  padding-top:8px!important;
+  border-top:1px solid rgba(255,255,255,.13)!important;
+  background:transparent!important;
+  background-color:transparent!important;
+  background-image:none!important;
+}
+
+html body .metric-extra .ai-mini b{
+  white-space:nowrap!important;
+  font-size:11.5px!important;
+  line-height:1.35!important;
+}
+
+html body .metric-extra .ai-mini > span,
+html body [data-ai],
+html body [data-local-ai]{
+  white-space:normal!important;
+  word-break:break-word!important;
+  overflow:visible!important;
+  line-height:1.42!important;
+  font-size:11.5px!important;
+  letter-spacing:0!important;
+  font-weight:950!important;
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  background-image:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  text-shadow:none!important;
+}
+
+/* 数据颜色继续保留 */
+html body .metric-extra .mini .m-up{display:inline!important;color:#34d399!important;-webkit-text-fill-color:#34d399!important;margin-right:8px!important}
+html body .metric-extra .mini .m-down{display:inline!important;color:#38bdf8!important;-webkit-text-fill-color:#38bdf8!important}
+html body .metric-extra .mini .m-load{display:inline!important;color:#a78bfa!important;-webkit-text-fill-color:#a78bfa!important}
+html body .metric-extra .mini .m-sep{display:inline!important;color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+html body .metric-extra .mini .m-ok{color:#34d399!important;-webkit-text-fill-color:#34d399!important}
+html body .metric-extra .mini .m-warn{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+
+html.light body .metric-extra .mini b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light body .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light body .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
+html.light body .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
+html.light body .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
+html.light body .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light body .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
+html.light body .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
+
+@media(max-width:420px){
+  html body .metric-extra .mini{grid-template-columns:42px minmax(0,1fr)!important;column-gap:6px!important}
+  html body .metric-extra .ai-mini{grid-template-columns:80px minmax(0,1fr)!important}
+  html body .metric-extra .mini > span{font-size:10px!important;letter-spacing:-.6px!important}
+}
+/* ===== end truly transparent metric rows ===== */
+"""
+
+_TRANSPARENT_METRIC_ROWS_JS = r"""
+<script>
+(function(){
+  function clearMetricRowBackgrounds(){
+    document.querySelectorAll('.metric-extra,.metric-extra .mini').forEach(function(el){
+      el.style.setProperty('background','transparent','important');
+      el.style.setProperty('background-color','transparent','important');
+      el.style.setProperty('background-image','none','important');
+      el.style.setProperty('border','0','important');
+      el.style.setProperty('box-shadow','none','important');
+    });
+  }
+  document.addEventListener('DOMContentLoaded',function(){
+    clearMetricRowBackgrounds();
+    setInterval(clearMetricRowBackgrounds, 1800);
+  });
+})();
+</script>
+"""
+
+def _apply_transparent_metric_rows_patch():
+    global BASE
+    if 'truly transparent metric rows' not in BASE:
+        BASE = BASE.replace('</style><script>', _TRANSPARENT_METRIC_ROWS_CSS + '</style><script>')
+    if 'clearMetricRowBackgrounds' not in BASE:
+        BASE = BASE.replace('</script></head><body>', '</script>' + _TRANSPARENT_METRIC_ROWS_JS + '</head><body>')
+
+_apply_transparent_metric_rows_patch()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
