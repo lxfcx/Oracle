@@ -3157,4 +3157,266 @@ def _apply_metric_display_fix_patch():
 _apply_metric_display_fix_patch()
 # ===== END FINAL METRIC DISPLAY PATCH =====
 
+
+# ===== USER PATCH: horizontal colored metrics without boxes + visible live lamp =====
+def _fmt_metric_unit_inline(n, suffix=''):
+    try:
+        n = float(n or 0)
+    except Exception:
+        return '0 B' + suffix
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    i = 0
+    while abs(n) >= 1024 and i < len(units) - 1:
+        n /= 1024.0
+        i += 1
+    if i == 0:
+        s = f'{n:.0f} {units[i]}'
+    else:
+        s = f'{n:.2f} {units[i]}'
+    return s + suffix
+
+def _metric_inline_up_down(up_value, down_value, suffix=''):
+    return (
+        f'<span class="m-up">↑ {_fmt_metric_unit_inline(up_value, suffix)}</span>'
+        f'<span class="m-down">↓ {_fmt_metric_unit_inline(down_value, suffix)}</span>'
+    )
+
+def _metric_inline_load(load1, load5, load15):
+    try: l1 = float(load1 or 0)
+    except Exception: l1 = 0.0
+    try: l5 = float(load5 or 0)
+    except Exception: l5 = 0.0
+    try: l15 = float(load15 or 0)
+    except Exception: l15 = 0.0
+    return f'<span class="m-load">{l1:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l5:.2f}</span><span class="m-sep"> | </span><span class="m-load">{l15:.2f}</span>'
+
+def _metric_state_html(v):
+    txt = str(v or '未上报')
+    cls = 'm-warn' if ('未上报' in txt or '未检测' in txt or '未知' in txt) else 'm-ok'
+    return f'<span class="{cls}">{html.escape(txt)}</span>'
+
+_PREV_METRIC_JSON_FOR_HORIZONTAL = metric_json
+def metric_json(x):
+    j = _PREV_METRIC_JSON_FOR_HORIZONTAL(x)
+    j['net_speed_html'] = _metric_inline_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
+    j['traffic_html'] = _metric_inline_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
+    j['load_html'] = _metric_inline_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
+    # GPU / IO / TCP 保留原取数，只给状态加颜色外壳。
+    for key in ('gpu_html', 'io_html', 'tcp_html'):
+        j[key] = _metric_state_html(j.get(key) or '未上报')
+    return j
+
+_PREV_LOCAL_LIVE_JSON_FOR_HORIZONTAL = _local_live_json
+def _local_live_json():
+    j = _PREV_LOCAL_LIVE_JSON_FOR_HORIZONTAL()
+    j['net_speed_html'] = _metric_inline_up_down(j.get('up_speed', 0), j.get('down_speed', 0), '/s')
+    j['traffic_html'] = _metric_inline_up_down(j.get('tx_bytes', 0), j.get('rx_bytes', 0), '')
+    j['load_html'] = _metric_inline_load(j.get('load1', 0), j.get('load5', 0), j.get('load15', 0))
+    for key in ('gpu_html', 'io_html', 'tcp_html'):
+        j[key] = _metric_state_html(j.get(key) or '未上报')
+    return j
+
+_HORIZONTAL_METRICS_CSS = r"""
+/* ===== horizontal colored metrics no-box patch ===== */
+.metric-extra{
+  display:block!important;
+  margin-top:8px!important;
+  padding:0!important;
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+}
+.metric-extra .mini{
+  display:grid!important;
+  grid-template-columns:52px minmax(0,1fr)!important;
+  align-items:center!important;
+  gap:10px!important;
+  min-width:0!important;
+  width:100%!important;
+  min-height:0!important;
+  height:auto!important;
+  padding:3px 0!important;
+  margin:0!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+  overflow:visible!important;
+}
+.metric-extra .mini b{
+  margin:0!important;
+  padding:0!important;
+  display:block!important;
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  font-size:12px!important;
+  font-weight:1000!important;
+  line-height:1.25!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
+}
+.metric-extra .mini > span{
+  display:block!important;
+  min-width:0!important;
+  width:100%!important;
+  height:auto!important;
+  min-height:0!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:clip!important;
+  line-height:1.28!important;
+  font-size:11.5px!important;
+  font-weight:950!important;
+  letter-spacing:-.35px!important;
+  font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum" 1!important;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace!important;
+  color:#eaf7ff!important;
+  -webkit-text-fill-color:#eaf7ff!important;
+  text-shadow:0 1px 2px rgba(0,0,0,.45)!important;
+}
+.metric-extra .mini .m-up{color:#34d399!important;-webkit-text-fill-color:#34d399!important;margin-right:8px!important}
+.metric-extra .mini .m-down{color:#38bdf8!important;-webkit-text-fill-color:#38bdf8!important}
+.metric-extra .mini .m-load{color:#a78bfa!important;-webkit-text-fill-color:#a78bfa!important}
+.metric-extra .mini .m-sep{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+.metric-extra .mini .m-ok{color:#34d399!important;-webkit-text-fill-color:#34d399!important}
+.metric-extra .mini .m-warn{color:#fbbf24!important;-webkit-text-fill-color:#fbbf24!important}
+.metric-extra .ai-mini{
+  grid-template-columns:92px minmax(0,1fr)!important;
+  margin-top:3px!important;
+  padding-top:4px!important;
+  border-top:1px solid rgba(255,255,255,.12)!important;
+}
+.metric-extra .ai-mini > span,
+[data-ai],[data-local-ai]{
+  color:#f0abfc!important;
+  -webkit-text-fill-color:#f0abfc!important;
+  white-space:normal!important;
+  overflow:visible!important;
+  line-height:1.38!important;
+  font-size:11.5px!important;
+  font-weight:950!important;
+  text-shadow:0 1px 2px rgba(0,0,0,.42)!important;
+}
+html.light .metric-extra .mini b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+html.light .metric-extra .mini > span{
+  color:#1e293b!important;
+  -webkit-text-fill-color:#1e293b!important;
+  text-shadow:none!important;
+}
+html.light .metric-extra .mini .m-up{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light .metric-extra .mini .m-down{color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
+html.light .metric-extra .mini .m-load{color:#6d28d9!important;-webkit-text-fill-color:#6d28d9!important}
+html.light .metric-extra .mini .m-sep{color:#ca8a04!important;-webkit-text-fill-color:#ca8a04!important}
+html.light .metric-extra .mini .m-ok{color:#15803d!important;-webkit-text-fill-color:#15803d!important}
+html.light .metric-extra .mini .m-warn{color:#b45309!important;-webkit-text-fill-color:#b45309!important}
+html.light .metric-extra .ai-mini{border-top-color:rgba(15,23,42,.12)!important}
+html.light .metric-extra .ai-mini > span,
+html.light [data-ai],html.light [data-local-ai]{
+  color:#7e22ce!important;
+  -webkit-text-fill-color:#7e22ce!important;
+  text-shadow:none!important;
+}
+
+/* 0刷新状态灯：直接插入真实元素，不再只依赖伪元素 */
+[data-neon-live]{
+  display:inline-flex!important;
+  align-items:center!important;
+  gap:8px!important;
+}
+[data-neon-live] .live-lamp{
+  width:11px!important;
+  height:11px!important;
+  min-width:11px!important;
+  min-height:11px!important;
+  border-radius:999px!important;
+  display:inline-block!important;
+  background:#f59e0b!important;
+  box-shadow:0 0 10px rgba(245,158,11,.95),0 0 22px rgba(245,158,11,.38)!important;
+  animation:liveLampRealAmber 1.45s ease-in-out infinite!important;
+}
+[data-neon-live].is-live .live-lamp{
+  background:#22c55e!important;
+  box-shadow:0 0 10px rgba(34,197,94,1),0 0 24px rgba(34,197,94,.48)!important;
+  animation:liveLampRealGreen 1.45s ease-in-out infinite!important;
+}
+[data-neon-live].is-sse .live-lamp{
+  background:#facc15!important;
+  box-shadow:0 0 10px rgba(250,204,21,1),0 0 24px rgba(250,204,21,.48)!important;
+  animation:liveLampRealAmber 1.45s ease-in-out infinite!important;
+}
+[data-neon-live].is-poll .live-lamp,
+[data-neon-live].is-down .live-lamp{
+  background:#ef4444!important;
+  box-shadow:0 0 10px rgba(239,68,68,1),0 0 24px rgba(239,68,68,.50)!important;
+  animation:liveLampRealRed 1.45s ease-in-out infinite!important;
+}
+@keyframes liveLampRealGreen{0%,100%{transform:scale(1)}50%{transform:scale(1.13)}}
+@keyframes liveLampRealAmber{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+@keyframes liveLampRealRed{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+@media(max-width:520px){
+  .metric-extra .mini{grid-template-columns:48px minmax(0,1fr)!important}
+  .metric-extra .ai-mini{grid-template-columns:82px minmax(0,1fr)!important}
+  .metric-extra .mini > span{font-size:10.5px!important}
+}
+/* ===== end horizontal colored metrics no-box patch ===== */
+"""
+
+_HORIZONTAL_METRICS_JS = r"""
+<script>
+(function(){
+  function normalizeMetricHtml(){
+    document.querySelectorAll('.metric-extra .mini > span').forEach(function(el){
+      if(el.querySelector('.m-up,.m-down,.m-load,.m-ok,.m-warn')) return;
+      var txt=(el.textContent||'').trim();
+      if(!txt) return;
+      if(/未上报|未检测|未知/.test(txt)){
+        el.innerHTML='<span class="m-warn">'+txt.replace(/[<>&]/g,function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];})+'</span>';
+      }
+    });
+  }
+  function chipStateFromText(t){
+    if(/WebSocket/i.test(t||'')) return 'is-live';
+    if(/\bSSE\b/i.test(t||'')) return 'is-sse';
+    if(/轮询|回退|失败|断开|错误/i.test(t||'')) return 'is-poll';
+    return 'is-connecting';
+  }
+  function ensureLiveLamp(){
+    var chip=document.querySelector('[data-neon-live]');
+    if(!chip) return;
+    if(!chip.querySelector('.live-lamp')){
+      var lamp=document.createElement('span');
+      lamp.className='live-lamp';
+      chip.insertBefore(lamp, chip.firstChild);
+    }
+    var text=(chip.textContent||'').replace(/\s+/g,' ').trim();
+    chip.classList.remove('is-live','is-sse','is-poll','is-down','is-connecting');
+    chip.classList.add(chipStateFromText(text));
+  }
+  document.addEventListener('DOMContentLoaded',function(){
+    normalizeMetricHtml();
+    ensureLiveLamp();
+    var chip=document.querySelector('[data-neon-live]');
+    if(chip){
+      try{new MutationObserver(ensureLiveLamp).observe(chip,{childList:true,characterData:true,subtree:true});}catch(e){}
+    }
+    setInterval(function(){normalizeMetricHtml();ensureLiveLamp();},1500);
+  });
+})();
+</script>
+"""
+
+def _apply_horizontal_metrics_patch():
+    global BASE
+    if 'horizontal colored metrics no-box patch' not in BASE:
+        BASE = BASE.replace('</style><script>', _HORIZONTAL_METRICS_CSS + '</style><script>')
+    if 'normalizeMetricHtml' not in BASE:
+        BASE = BASE.replace('</script></head><body>', '</script>' + _HORIZONTAL_METRICS_JS + '</head><body>')
+
+_apply_horizontal_metrics_patch()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
