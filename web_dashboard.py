@@ -3777,4 +3777,123 @@ def _apply_final_visual_fix_patch():
 _apply_final_visual_fix_patch()
 # ===== END FINAL USER VISUAL FIX =====
 
+
+# ===== AI ONLY FIX: title on top, data below, transparent card style =====
+_AI_ONLY_FIX_CSS = r"""
+/* ===== AI only fix: do not affect other functions ===== */
+html body .metric-extra .ai-mini,
+html body .servercard .metric-extra .ai-mini,
+html body .card .metric-extra .ai-mini,
+html body div.metric-extra > div.ai-mini{
+  display:block!important;
+  grid-template-columns:none!important;
+  width:100%!important;
+  min-width:0!important;
+  height:auto!important;
+  min-height:0!important;
+  margin:10px 0 0!important;
+  padding:10px 11px!important;
+  border-radius:15px!important;
+  border:1px solid rgba(125,211,252,.22)!important;
+  background:linear-gradient(135deg,rgba(34,211,238,.12),rgba(96,165,250,.08),rgba(52,211,153,.08))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.10),0 8px 22px rgba(14,165,233,.08)!important;
+  overflow:visible!important;
+}
+
+html body .metric-extra .ai-mini b,
+html body .servercard .metric-extra .ai-mini b,
+html body .card .metric-extra .ai-mini b{
+  display:block!important;
+  width:100%!important;
+  margin:0 0 6px!important;
+  padding:0!important;
+  white-space:nowrap!important;
+  color:#ffffff!important;
+  -webkit-text-fill-color:#ffffff!important;
+  background:none!important;
+  -webkit-background-clip:initial!important;
+  background-clip:initial!important;
+  font-size:12px!important;
+  line-height:1.3!important;
+  font-weight:1000!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.70)!important;
+}
+
+html body .metric-extra .ai-mini > span,
+html body .servercard .metric-extra .ai-mini > span,
+html body .card .metric-extra .ai-mini > span,
+html body [data-ai],
+html body [data-local-ai]{
+  display:block!important;
+  width:100%!important;
+  min-width:0!important;
+  margin:0!important;
+  padding:0!important;
+  white-space:normal!important;
+  word-break:break-word!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  line-height:1.45!important;
+  font-size:11.5px!important;
+  letter-spacing:0!important;
+  font-weight:950!important;
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  text-shadow:none!important;
+}
+
+/* 日间模式只处理 AI 卡片本身 */
+html.light body .metric-extra .ai-mini,
+html.light body .servercard .metric-extra .ai-mini,
+html.light body .card .metric-extra .ai-mini{
+  border-color:rgba(37,99,235,.16)!important;
+  background:linear-gradient(135deg,rgba(255,255,255,.56),rgba(219,234,254,.42),rgba(240,253,250,.34))!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.72),0 8px 20px rgba(37,99,235,.08)!important;
+}
+
+html.light body .metric-extra .ai-mini b,
+html.light body .servercard .metric-extra .ai-mini b,
+html.light body .card .metric-extra .ai-mini b{
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  text-shadow:none!important;
+}
+
+html.light body .metric-extra .ai-mini > span,
+html.light body .servercard .metric-extra .ai-mini > span,
+html.light body .card .metric-extra .ai-mini > span,
+html.light body [data-ai],
+html.light body [data-local-ai]{
+  background:linear-gradient(90deg,#0369a1,#2563eb,#7c3aed,#059669)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  -webkit-text-fill-color:transparent!important;
+}
+
+/* 实色模式只让 AI 卡片透明度跟着主题变化，不影响其它组件 */
+html.solid body .metric-extra .ai-mini,
+body.solid .metric-extra .ai-mini{
+  background:linear-gradient(135deg,rgba(15,23,42,.46),rgba(30,41,59,.32),rgba(14,116,144,.18))!important;
+  border-color:rgba(125,211,252,.24)!important;
+}
+
+html.light.solid body .metric-extra .ai-mini,
+body.light.solid .metric-extra .ai-mini{
+  background:linear-gradient(135deg,rgba(255,255,255,.88),rgba(239,246,255,.78),rgba(236,253,245,.66))!important;
+  border-color:rgba(37,99,235,.15)!important;
+}
+/* ===== end AI only fix ===== */
+"""
+
+def _apply_ai_only_fix_patch():
+    global BASE
+    if 'AI only fix: do not affect other functions' not in BASE:
+        BASE = BASE.replace('</style><script>', _AI_ONLY_FIX_CSS + '</style><script>')
+
+_apply_ai_only_fix_patch()
+# ===== END AI ONLY FIX =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
