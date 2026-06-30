@@ -5538,4 +5538,155 @@ def _apply_modal_radar_realfix_patch():
 _apply_modal_radar_realfix_patch()
 # ===== END USER PATCH =====
 
+
+# ===== USER PATCH: light radar colors + modal readable text + compact dot + cached bg =====
+_LIGHT_RADAR_MODAL_DOT_BG_CSS = r"""
+/* ===== light radar, modal readable text, compact breathing dots, cached background ===== */
+
+/* 1) 日间实色模式下雷达圆圈不要一片死绿；正常状态用蓝绿渐变，警戒/高危仍然黄/红 */
+html.light body .radar-card.ok,
+html.light.solid body .radar-card.ok,
+body.light.solid .radar-card.ok{
+  --radar-color:#0ea5e9!important;
+}
+html.light body .radar-card.ok .radar,
+html.light.solid body .radar-card.ok .radar,
+body.light.solid .radar-card.ok .radar{
+  background:
+    conic-gradient(from 0deg,#0ea5e9 0 var(--risk),#22c55e var(--risk),rgba(37,99,235,.12) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.20) 22px 23px),
+    radial-gradient(circle,#f0f9ff,#dcfce7)!important;
+}
+html.light body .radar-card.warn,
+html.light.solid body .radar-card.warn,
+body.light.solid .radar-card.warn{--radar-color:#f59e0b!important}
+html.light body .radar-card.danger,
+html.light.solid body .radar-card.danger,
+body.light.solid .radar-card.danger{--radar-color:#ef4444!important}
+
+/* 2) 紧凑弹窗内所有标题/正文强制实体颜色，避免被旧渐变透明文字影响 */
+html body .compact-modal,
+html body .compact-modal *{
+  text-shadow:none;
+}
+html body .compact-modal h2,
+html body .compact-modal h3,
+html body .compact-modal-section h3,
+html body .compact-modal-line b,
+html body .compact-modal-line span,
+html body .compact-modal-section p,
+html body .compact-modal-section .small,
+html body .compact-modal-section div:not([data-ai]){
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  background:none!important;
+  background-image:none!important;
+  -webkit-background-clip:initial!important;
+  background-clip:initial!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.55)!important;
+}
+html.light body .compact-modal h2,
+html.light body .compact-modal h3,
+html.light body .compact-modal-section h3,
+html.light body .compact-modal-line b,
+html.light body .compact-modal-line span,
+html.light body .compact-modal-section p,
+html.light body .compact-modal-section .small,
+html.light body .compact-modal-section div:not([data-ai]){
+  color:#0f172a!important;
+  -webkit-text-fill-color:#0f172a!important;
+  background:none!important;
+  background-image:none!important;
+  -webkit-background-clip:initial!important;
+  background-clip:initial!important;
+  text-shadow:none!important;
+}
+html body .compact-modal [data-ai]{
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#22d3ee,#60a5fa,#a78bfa,#34d399)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  text-shadow:none!important;
+}
+html.light body .compact-modal [data-ai]{
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+  background:linear-gradient(90deg,#0369a1,#2563eb,#7c3aed,#059669)!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+}
+
+/* 3) 紧凑视图小卡片里的在线/离线灯：完整圆形 + 呼吸发光 */
+.compact-mini-card .compact-title .dot,
+.compact-cardgrid-view .compact-title .dot{
+  display:inline-block!important;
+  width:12px!important;
+  height:12px!important;
+  min-width:12px!important;
+  min-height:12px!important;
+  flex:0 0 12px!important;
+  border-radius:999px!important;
+  border:0!important;
+  outline:0!important;
+  overflow:visible!important;
+  margin:0 2px!important;
+  background:#22c55e!important;
+  box-shadow:0 0 10px rgba(34,197,94,.95),0 0 18px rgba(34,197,94,.55)!important;
+}
+.compact-mini-card .compact-title .dot.online,
+.compact-cardgrid-view .compact-title .dot.online{
+  background:#22c55e!important;
+  animation:compactDotGreenBreath 1.45s ease-in-out infinite!important;
+}
+.compact-mini-card .compact-title .dot.offline,
+.compact-cardgrid-view .compact-title .dot.offline{
+  background:#ef4444!important;
+  box-shadow:0 0 10px rgba(239,68,68,.95),0 0 18px rgba(239,68,68,.55)!important;
+  animation:compactDotRedBreath 1.45s ease-in-out infinite!important;
+}
+@keyframes compactDotGreenBreath{0%,100%{transform:scale(1);box-shadow:0 0 9px rgba(34,197,94,.95),0 0 18px rgba(34,197,94,.55)}50%{transform:scale(1.16);box-shadow:0 0 13px rgba(34,197,94,1),0 0 26px rgba(34,197,94,.72)}}
+@keyframes compactDotRedBreath{0%,100%{transform:scale(1);box-shadow:0 0 9px rgba(239,68,68,.95),0 0 18px rgba(239,68,68,.55)}50%{transform:scale(1.16);box-shadow:0 0 13px rgba(239,68,68,1),0 0 26px rgba(239,68,68,.72)}}
+
+/* 4) 背景图显示时避免重复加载导致闪烁卡顿 */
+body::before{will-change:auto!important}
+body.bg-cache-ready{background-attachment:fixed!important}
+/* ===== end patch ===== */
+"""
+
+_BG_CACHE_FIX_JS = r"""
+<script>
+(function(){
+  function fixThemeBgCache(){
+    try{
+      var old = document.body && document.body.style.getPropertyValue('--custom-bg');
+      if(old && /theme-bg\?v=/.test(old)){
+        document.body.style.setProperty('--custom-bg',"url('/theme-bg')",'important');
+      }
+      document.body.classList.add('bg-cache-ready');
+    }catch(e){}
+  }
+  document.addEventListener('DOMContentLoaded',function(){
+    fixThemeBgCache();
+    setTimeout(fixThemeBgCache,300);
+    setTimeout(fixThemeBgCache,1200);
+  });
+})();
+</script>
+"""
+
+def _apply_light_radar_modal_dot_bg_patch():
+    global BASE
+    if 'light radar, modal readable text, compact breathing dots' not in BASE:
+        BASE = BASE.replace('</style><script>', _LIGHT_RADAR_MODAL_DOT_BG_CSS + '</style><script>')
+    if 'fixThemeBgCache' not in BASE:
+        BASE = BASE.replace('</body></html>', _BG_CACHE_FIX_JS + '</body></html>')
+    # 直接去掉 BASE 里已有的背景图时间戳，避免每次刷新都强制重新请求图片。
+    BASE = BASE.replace("url('/theme-bg?v={{now}}')", "url('/theme-bg')")
+    BASE = BASE.replace("fetch('/theme-bg?v={{now}}')", "fetch('/theme-bg')")
+    BASE = BASE.replace("fetch('/theme-bg?v={{no", "fetch('/theme-bg'")
+
+_apply_light_radar_modal_dot_bg_patch()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
