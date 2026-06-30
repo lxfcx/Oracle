@@ -5927,4 +5927,249 @@ def _apply_bg_compact_radar_fix():
 _apply_bg_compact_radar_fix()
 # ===== END USER PATCH =====
 
+
+# ===== HARD FIX ONLY: compact modal progress bars + radar inline dynamic =====
+_MODAL_PROGRESS_RADAR_HARDFIX_CSS = r"""
+/* ===== hard fix: compact modal progress bars + radar forced dynamic style ===== */
+
+/* 1) 紧凑弹窗资源进度条：前面“弹窗文字实体色”规则把 div 背景清空了，这里只把进度条背景补回来 */
+html body .compact-modal .progress,
+html body .compact-modal-section .progress,
+html body .compact-modal .progressrow .progress{
+  display:block!important;
+  width:100%!important;
+  height:10px!important;
+  min-height:10px!important;
+  border-radius:999px!important;
+  overflow:hidden!important;
+  background:rgba(148,163,184,.28)!important;
+  box-shadow:inset 0 1px 3px rgba(2,6,23,.35)!important;
+}
+html body .compact-modal .bar,
+html body .compact-modal .progress .bar,
+html body .compact-modal-section .progress .bar{
+  display:block!important;
+  height:100%!important;
+  min-height:10px!important;
+  border-radius:999px!important;
+  background:linear-gradient(90deg,#22d3ee,#3b82f6,#8b5cf6)!important;
+  box-shadow:0 0 12px rgba(34,211,238,.42)!important;
+  -webkit-text-fill-color:initial!important;
+  color:inherit!important;
+}
+html body .compact-modal .bar.ok,
+html body .compact-modal .progress .bar.ok{
+  background:linear-gradient(90deg,#22c55e,#14b8a6,#38bdf8)!important;
+}
+html body .compact-modal .bar.warn,
+html body .compact-modal .progress .bar.warn{
+  background:linear-gradient(90deg,#facc15,#f59e0b,#fb923c)!important;
+}
+html body .compact-modal .bar.bad,
+html body .compact-modal .bar.danger,
+html body .compact-modal .progress .bar.bad,
+html body .compact-modal .progress .bar.danger{
+  background:linear-gradient(90deg,#fb7185,#ef4444,#f97316)!important;
+}
+html.light body .compact-modal .progress,
+html.light body .compact-modal-section .progress,
+html.light body .compact-modal .progressrow .progress{
+  background:rgba(37,99,235,.13)!important;
+  box-shadow:inset 0 1px 3px rgba(15,23,42,.14)!important;
+}
+html.light body .compact-modal .bar,
+html.light body .compact-modal .progress .bar,
+html.light body .compact-modal-section .progress .bar{
+  background:linear-gradient(90deg,#0284c7,#2563eb,#7c3aed)!important;
+  box-shadow:0 0 10px rgba(37,99,235,.25)!important;
+}
+html body .compact-modal .progressrow,
+html body .compact-modal .progressrow *,
+html body .compact-modal .progress-label,
+html body .compact-modal .label{
+  -webkit-text-fill-color:currentColor!important;
+}
+
+/* 2) 雷达图：日间明亮 + 实色背景下，正常状态强制蓝青紫，不再显示旧绿色圈 */
+html.light body.solid .radar-card,
+html.light body.solid .radar-card.ok,
+html.light body.solid .radar-card[data-ops-radar]{
+  --radar-color:#0ea5e9!important;
+}
+html.light body.solid .radar-card .radar,
+html.light body.solid .radar-card.ok .radar,
+html.light body.solid .radar-card[data-ops-radar] .radar{
+  background:
+    conic-gradient(from var(--radar-angle,0deg),#0ea5e9 0 var(--risk),#22c55e var(--risk),#7c3aed 72%,rgba(37,99,235,.14) 100%),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.24) 22px 23px),
+    radial-gradient(circle,#ecfeff,#dbeafe 58%,#f5f3ff)!important;
+}
+html.light body.solid .radar-card.warn .radar{
+  background:
+    conic-gradient(from var(--radar-angle,0deg),#f59e0b 0 var(--risk),#facc15 var(--risk),rgba(251,191,36,.14) 100%),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(245,158,11,.24) 22px 23px),
+    radial-gradient(circle,#fffbeb,#fef3c7 58%,#fff7ed)!important;
+}
+html.light body.solid .radar-card.danger .radar{
+  background:
+    conic-gradient(from var(--radar-angle,0deg),#ef4444 0 var(--risk),#fb7185 var(--risk),rgba(239,68,68,.14) 100%),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(239,68,68,.24) 22px 23px),
+    radial-gradient(circle,#fff1f2,#ffe4e6 58%,#fff7ed)!important;
+}
+html.light body.solid .radar-card [data-radar-number],
+html.light body.solid .radar-card [data-radar-score],
+html.light body.solid .radar-card [data-radar-label]{
+  color:var(--radar-color,#0ea5e9)!important;
+  -webkit-text-fill-color:var(--radar-color,#0ea5e9)!important;
+  background:none!important;
+  background-image:none!important;
+  -webkit-background-clip:initial!important;
+  background-clip:initial!important;
+  text-shadow:none!important;
+}
+/* ===== end hard fix ===== */
+"""
+
+_MODAL_PROGRESS_RADAR_HARDFIX_JS = r"""
+<script>
+(function(){
+  function n(v){v=Number(v);return isFinite(v)?v:0;}
+  function textNumber(s){
+    var m=(s||'').toString().match(/-?[\d.]+/);
+    return m?Number(m[0]):0;
+  }
+  function parseBytes(s){
+    s=(s||'').toString();
+    var m=s.match(/([\d.]+)\s*(B|KB|MB|GB|TB)/i);
+    if(!m)return 0;
+    var x=parseFloat(m[1]||'0'), u=m[2].toUpperCase();
+    var k={B:1,KB:1024,MB:1048576,GB:1073741824,TB:1099511627776}[u]||1;
+    return x*k;
+  }
+  function cssVarRisk(card,risk,cls,color){
+    var pct=Math.max(0,Math.min(100,Math.round(risk)));
+    card.classList.remove('ok','warn','danger');
+    card.classList.add(cls);
+    card.style.setProperty('--risk',pct+'%','important');
+    card.style.setProperty('--radar-color',color,'important');
+    var radar=card.querySelector('.radar');
+    if(radar){
+      radar.style.setProperty('--risk',pct+'%','important');
+      radar.style.setProperty('--radar-color',color,'important');
+      var solidLight=document.documentElement.classList.contains('light') && document.body.classList.contains('solid');
+      var bg;
+      if(solidLight && cls==='ok'){
+        bg="conic-gradient(from var(--radar-angle,0deg),#0ea5e9 0 "+pct+"%,#22c55e "+pct+"%,#7c3aed 72%,rgba(37,99,235,.14) 100%),repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.24) 22px 23px),radial-gradient(circle,#ecfeff,#dbeafe 58%,#f5f3ff)";
+      }else if(cls==='warn'){
+        bg="conic-gradient(from var(--radar-angle,0deg),#f59e0b 0 "+pct+"%,#facc15 "+pct+"%,rgba(251,191,36,.14) 100%),repeating-radial-gradient(circle,transparent 0 21px,rgba(245,158,11,.24) 22px 23px)";
+      }else if(cls==='danger'){
+        bg="conic-gradient(from var(--radar-angle,0deg),#ef4444 0 "+pct+"%,#fb7185 "+pct+"%,rgba(239,68,68,.14) 100%),repeating-radial-gradient(circle,transparent 0 21px,rgba(239,68,68,.24) 22px 23px)";
+      }else{
+        bg="conic-gradient(from var(--radar-angle,0deg),#0ea5e9 0 "+pct+"%,#22c55e "+pct+"%,#7c3aed 72%,rgba(14,165,233,.14) 100%),repeating-radial-gradient(circle,transparent 0 21px,rgba(14,165,233,.22) 22px 23px)";
+      }
+      radar.style.setProperty('background',bg,'important');
+    }
+  }
+  function setTxt(card,sel,val){
+    var e=card.querySelector(sel);
+    if(e)e.textContent=val;
+  }
+  function clsColor(risk){
+    if(risk>=75)return ['danger','#ef4444','高危'];
+    if(risk>=45)return ['warn','#f59e0b','警戒'];
+    return ['ok','#0ea5e9','正常'];
+  }
+  function riskFromPacketServers(ss){
+    var total=Math.max(1,(ss||[]).length), offline=0, cpu=0, mem=0, disk=0, tcp=0, net=0;
+    (ss||[]).forEach(function(s){
+      if(!s.online)offline++;
+      cpu=Math.max(cpu,n(s.cpu),n(s.cpu_percent));
+      mem=Math.max(mem,n(s.mem),n(s.mem_percent));
+      disk=Math.max(disk,n(s.disk),n(s.disk_percent));
+      tcp=Math.max(tcp,n(s.tcp_established),n(s.tcp),n(s.tcp_est));
+      net=Math.max(net,parseBytes(s.net_speed_html||'')||parseBytes(s.traffic_html||''));
+    });
+    var netRisk=Math.min(100,net/(1024*1024)*10);
+    return {risk:Math.max(offline*100/total,cpu,mem,disk,Math.min(100,tcp/20),netRisk),total:total,offline:offline,cpu:cpu,mem:mem,tcp:tcp};
+  }
+  function riskFromDom(){
+    var cpu=0,mem=0,disk=0,tcp=0,total=0,offline=0,net=0;
+    document.querySelectorAll('[data-view-card] .servercard, .compact-mini-card').forEach(function(card){
+      total++;
+      if(card.querySelector('.dot.offline'))offline++;
+    });
+    document.querySelectorAll('[data-cputxt]').forEach(function(e){cpu=Math.max(cpu,textNumber(e.textContent));});
+    document.querySelectorAll('[data-memtxt]').forEach(function(e){mem=Math.max(mem,textNumber(e.textContent));});
+    document.querySelectorAll('[data-disktxt]').forEach(function(e){disk=Math.max(disk,textNumber(e.textContent));});
+    document.querySelectorAll('[data-tcp]').forEach(function(e){tcp=Math.max(tcp,textNumber(e.textContent));});
+    document.querySelectorAll('[data-netspeed]').forEach(function(e){net=Math.max(net,parseBytes(e.textContent));});
+    total=Math.max(1,total);
+    var netRisk=Math.min(100,net/(1024*1024)*10);
+    return {risk:Math.max(offline*100/total,cpu,mem,disk,Math.min(100,tcp/20),netRisk),total:total,offline:offline,cpu:cpu,mem:mem,tcp:tcp};
+  }
+  var target=0, phase=0;
+  function renderRadar(payload){
+    var card=document.querySelector('[data-ops-radar]');
+    if(!card)return;
+    payload=payload||riskFromDom();
+    target=Math.max(0,Math.min(100,payload.risk||0));
+    var cc=clsColor(target), cls=cc[0], color=cc[1], label=cc[2];
+    cssVarRisk(card,target,cls,color);
+    setTxt(card,'[data-radar-score]',Math.round(target));
+    setTxt(card,'[data-radar-label]',label);
+    setTxt(card,'[data-radar-offline]',(payload.offline||0)+'/'+(payload.total||1));
+    setTxt(card,'[data-radar-cpu]',Math.round(payload.cpu||0)+'%');
+    setTxt(card,'[data-radar-mem]',Math.round(payload.mem||0)+'%');
+    setTxt(card,'[data-radar-tcp]',Math.round(payload.tcp||0));
+  }
+  function animateRadar(){
+    var card=document.querySelector('[data-ops-radar]');
+    if(!card)return;
+    phase++;
+    var angle=(phase*18)%360;
+    card.style.setProperty('--radar-angle',angle+'deg','important');
+    var v=Math.max(0,Math.min(100,Math.round(target + Math.sin(phase/2)*2)));
+    setTxt(card,'[data-radar-number]',v);
+    var radar=card.querySelector('.radar');
+    if(radar)radar.style.setProperty('--radar-angle',angle+'deg','important');
+  }
+  function patchPacket(){
+    var old=window.neonApplyPacket;
+    if(old&&!old.__modalProgressRadarHardfix){
+      window.neonApplyPacket=function(j){
+        var r=old(j);
+        try{ if(j&&j.servers)renderRadar(riskFromPacketServers(j.servers)); }catch(e){}
+        return r;
+      };
+      window.neonApplyPacket.__modalProgressRadarHardfix=true;
+    }
+  }
+  async function poll(){
+    try{
+      var r=await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store'});
+      var j=await r.json();
+      if(j&&j.servers)renderRadar(riskFromPacketServers(j.servers));
+      else renderRadar(riskFromDom());
+    }catch(e){renderRadar(riskFromDom());}
+  }
+  document.addEventListener('DOMContentLoaded',function(){
+    patchPacket();
+    poll();
+    setInterval(function(){patchPacket();poll();},1500);
+    setInterval(animateRadar,350);
+  });
+})();
+</script>
+"""
+
+def _apply_modal_progress_radar_hardfix():
+    global BASE
+    if 'hard fix: compact modal progress bars + radar forced dynamic style' not in BASE:
+        BASE = BASE.replace('</style><script>', _MODAL_PROGRESS_RADAR_HARDFIX_CSS + '</style><script>')
+    if 'modalProgressRadarHardfix' not in BASE:
+        BASE = BASE.replace('</body></html>', _MODAL_PROGRESS_RADAR_HARDFIX_JS + '</body></html>')
+
+_apply_modal_progress_radar_hardfix()
+# ===== END HARD FIX ONLY =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
