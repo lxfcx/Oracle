@@ -5353,4 +5353,189 @@ def _apply_modal_radar_events_patch():
 _apply_modal_radar_events_patch()
 # ===== END USER PATCH =====
 
+
+# ===== USER PATCH: modal top layer + radar real polling/live update =====
+_MODAL_RADAR_REALFIX_CSS = r"""
+/* ===== modal top layer + radar real update fix ===== */
+.compact-modal-backdrop{
+  z-index:2147483000!important;
+  position:fixed!important;
+  inset:0!important;
+  display:none!important;
+  align-items:center!important;
+  justify-content:center!important;
+  padding:18px!important;
+  background:rgba(2,6,23,.62)!important;
+  backdrop-filter:blur(16px)!important;
+  -webkit-backdrop-filter:blur(16px)!important;
+}
+.compact-modal-backdrop.show{
+  display:flex!important;
+}
+.compact-modal{
+  position:relative!important;
+  z-index:2147483001!important;
+  width:min(920px,96vw)!important;
+  max-height:86vh!important;
+  overflow:auto!important;
+  margin:auto!important;
+}
+body.compact-modal-open{
+  overflow:hidden!important;
+}
+.radar-card .radar{
+  background:
+    conic-gradient(var(--radar-color,#22c55e) var(--risk),rgba(255,255,255,.16) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(255,255,255,.16) 22px 23px)!important;
+}
+.radar-card.danger .radar,
+.radar-card.warn .radar,
+.radar-card.ok .radar{
+  background:
+    conic-gradient(var(--radar-color,#22c55e) var(--risk),rgba(255,255,255,.16) 0),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(255,255,255,.16) 22px 23px)!important;
+}
+.radar-card.danger{--radar-color:#fb7185!important}
+.radar-card.warn{--radar-color:#facc15!important}
+.radar-card.ok{--radar-color:#22c55e!important}
+.radar-card [data-radar-number],
+.radar-card [data-radar-score],
+.radar-card [data-radar-label]{
+  color:var(--radar-color,#22c55e)!important;
+  -webkit-text-fill-color:var(--radar-color,#22c55e)!important;
+}
+/* ===== end modal top layer + radar real update fix ===== */
+"""
+
+_MODAL_RADAR_REALFIX_JS = r"""
+<script>
+(function(){
+  function bodyAppendModal(modal){
+    if(modal && modal.parentNode !== document.body){
+      document.body.appendChild(modal);
+    }
+  }
+
+  window.openCompactModal=function(id){
+    document.querySelectorAll('.compact-modal-backdrop.show').forEach(function(m){m.classList.remove('show');});
+    var m=document.querySelector('[data-compact-modal="'+id+'"]');
+    if(!m)return;
+    bodyAppendModal(m);
+    m.classList.add('show');
+    document.body.classList.add('compact-modal-open');
+  };
+
+  window.closeCompactModal=function(id){
+    var m=document.querySelector('[data-compact-modal="'+id+'"]');
+    if(m)m.classList.remove('show');
+    document.body.classList.remove('compact-modal-open');
+  };
+
+  document.addEventListener('click',function(e){
+    if(e.target.classList && e.target.classList.contains('compact-modal-backdrop')){
+      e.target.classList.remove('show');
+      document.body.classList.remove('compact-modal-open');
+    }
+  });
+
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){
+      document.querySelectorAll('.compact-modal-backdrop.show').forEach(function(m){m.classList.remove('show');});
+      document.body.classList.remove('compact-modal-open');
+    }
+  });
+
+  function pickNumber(obj, keys){
+    for(var i=0;i<keys.length;i++){
+      var v=obj && obj[keys[i]];
+      if(v!==undefined && v!==null && v!=='' && !isNaN(Number(v))) return Number(v);
+    }
+    return 0;
+  }
+
+  function radarClass(risk){return risk>=75?'danger':(risk>=45?'warn':'ok');}
+  function radarColor(cls){return cls==='danger'?'#fb7185':(cls==='warn'?'#facc15':'#22c55e');}
+
+  function updateOpsRadarFromServers(ss){
+    var card=document.querySelector('[data-ops-radar]');
+    if(!card || !ss)return;
+
+    var total=Math.max(1,ss.length), offline=0,cpu=0,mem=0,disk=0,tcp=0;
+    ss.forEach(function(s){
+      if(!s.online) offline++;
+      cpu=Math.max(cpu,pickNumber(s,['cpu','cpu_percent']));
+      mem=Math.max(mem,pickNumber(s,['mem','mem_percent']));
+      disk=Math.max(disk,pickNumber(s,['disk','disk_percent']));
+      tcp=Math.max(tcp,pickNumber(s,['tcp_established','tcp','tcp_est','connections_established']));
+    });
+
+    var risk=Math.max(offline*100/total,cpu,mem,disk,Math.min(100,tcp/20));
+    var cls=radarClass(risk), color=radarColor(cls), label=cls==='danger'?'高危':(cls==='warn'?'警戒':'正常');
+    var pct=Math.round(Math.max(0,Math.min(100,risk)));
+
+    card.classList.remove('ok','warn','danger');
+    card.classList.add(cls);
+    card.style.setProperty('--risk',pct+'%');
+    card.style.setProperty('--radar-color',color);
+
+    var radar=card.querySelector('.radar');
+    if(radar){
+      radar.style.setProperty('--risk',pct+'%');
+      radar.style.setProperty('--radar-color',color);
+    }
+
+    function txt(sel,v){var e=card.querySelector(sel);if(e)e.textContent=v;}
+    txt('[data-radar-number]',pct);
+    txt('[data-radar-score]',pct);
+    txt('[data-radar-label]',label);
+    txt('[data-radar-offline]',offline+'/'+total);
+    txt('[data-radar-cpu]',Math.round(cpu)+'%');
+    txt('[data-radar-mem]',Math.round(mem)+'%');
+    txt('[data-radar-tcp]',tcp);
+  }
+
+  function patchLivePacket(){
+    var old=window.neonApplyPacket;
+    if(old && !old.__radarRealFix){
+      window.neonApplyPacket=function(j){
+        var r=old(j);
+        try{ if(j && j.servers) updateOpsRadarFromServers(j.servers); }catch(e){}
+        return r;
+      };
+      window.neonApplyPacket.__radarRealFix=true;
+    }
+  }
+
+  async function pollRadarOnce(){
+    try{
+      var r=await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store',headers:{'Cache-Control':'no-cache'}});
+      var j=await r.json();
+      if(j && j.servers) updateOpsRadarFromServers(j.servers);
+    }catch(e){}
+  }
+
+  document.addEventListener('DOMContentLoaded',function(){
+    patchLivePacket();
+    setTimeout(patchLivePacket,500);
+    setTimeout(patchLivePacket,1500);
+    pollRadarOnce();
+    setInterval(function(){
+      patchLivePacket();
+      pollRadarOnce();
+    },2000);
+  });
+})();
+</script>
+"""
+
+def _apply_modal_radar_realfix_patch():
+    global BASE
+    if 'modal top layer + radar real update fix' not in BASE:
+        BASE = BASE.replace('</style><script>', _MODAL_RADAR_REALFIX_CSS + '</style><script>')
+    if 'radarRealFix' not in BASE:
+        BASE = BASE.replace('</body></html>', _MODAL_RADAR_REALFIX_JS + '</body></html>')
+
+_apply_modal_radar_realfix_patch()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
