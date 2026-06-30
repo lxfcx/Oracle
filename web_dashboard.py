@@ -5689,4 +5689,242 @@ def _apply_light_radar_modal_dot_bg_patch():
 _apply_light_radar_modal_dot_bg_patch()
 # ===== END USER PATCH =====
 
+
+# ===== USER PATCH: uploaded bg cache/visibility + dark compact readability + radar live color/number =====
+_BG_COMPACT_RADAR_FIX_CSS = r"""
+/* ===== uploaded bg visible/cache + dark compact readable + live radar ===== */
+
+/* 上传背景图：透明玻璃模式必须显示，不再被默认星空/渐变盖掉 */
+body.has-custom-bg:not(.solid)::before,
+html:not(.light) body.has-custom-bg:not(.solid)::before{
+  background-image:
+    linear-gradient(rgba(2,6,23,.34),rgba(2,6,23,.50)),
+    var(--custom-bg,url('/theme-bg')),
+    radial-gradient(circle at 20% 12%,rgba(59,130,246,.38),transparent 30%),
+    radial-gradient(circle at 90% 0,rgba(124,58,237,.34),transparent 34%),
+    linear-gradient(180deg,rgba(7,17,31,.50),rgba(2,6,23,.62))!important;
+  background-size:cover,cover,auto,auto,auto!important;
+  background-position:center,center,center,center,center!important;
+  background-repeat:no-repeat,no-repeat,no-repeat,no-repeat,no-repeat!important;
+}
+html.light body.has-custom-bg:not(.solid)::before{
+  background-image:
+    linear-gradient(rgba(255,255,255,.18),rgba(255,255,255,.28)),
+    var(--custom-bg,url('/theme-bg')),
+    radial-gradient(circle at 20% 12%,rgba(147,197,253,.42),transparent 30%),
+    radial-gradient(circle at 90% 0,rgba(196,181,253,.34),transparent 34%),
+    linear-gradient(180deg,rgba(239,246,255,.54),rgba(248,250,252,.66))!important;
+  background-size:cover,cover,auto,auto,auto!important;
+  background-position:center,center,center,center,center!important;
+  background-repeat:no-repeat,no-repeat,no-repeat,no-repeat,no-repeat!important;
+}
+
+/* 夜间实色/透明模式下：紧凑视图小卡片不要黑字和虚影，全部改成亮色 */
+html:not(.light) body .compact-mini-card,
+html:not(.light) body .compact-list.compact-cardgrid-view .compact-server{
+  background:linear-gradient(135deg,rgba(15,23,42,.72),rgba(30,41,59,.58),rgba(14,116,144,.28))!important;
+  border-color:rgba(125,211,252,.22)!important;
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  box-shadow:0 12px 30px rgba(2,6,23,.36), inset 0 1px 0 rgba(255,255,255,.12)!important;
+}
+html:not(.light) body .compact-mini-card *,
+html:not(.light) body .compact-mini-card .compact-title,
+html:not(.light) body .compact-mini-card .compact-title .name,
+html:not(.light) body .compact-mini-card .compact-stat,
+html:not(.light) body .compact-mini-card .compact-foot,
+html:not(.light) body .compact-mini-card .compact-foot span,
+html:not(.light) body .compact-mini-card .compact-net-row span,
+html:not(.light) body .compact-mini-card .compact-actions,
+html:not(.light) body .compact-detail-section h4,
+html:not(.light) body .compact-detail-section .compact-detail-line,
+html:not(.light) body .compact-detail-section .compact-detail-line b,
+html:not(.light) body .compact-detail-section .compact-detail-line span{
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+  text-shadow:0 1px 3px rgba(0,0,0,.55)!important;
+}
+html:not(.light) body .compact-mini-card .mini-tag{
+  background:rgba(255,255,255,.12)!important;
+  color:#f8fbff!important;
+  -webkit-text-fill-color:#f8fbff!important;
+}
+html:not(.light) body .compact-mini-card .mini-tag.ok{color:#86efac!important;-webkit-text-fill-color:#86efac!important}
+html:not(.light) body .compact-mini-card .mini-tag.bad,
+html:not(.light) body .compact-mini-card .mini-tag.danger{color:#fca5a5!important;-webkit-text-fill-color:#fca5a5!important}
+html:not(.light) body .compact-mini-card .compact-divider{background:rgba(255,255,255,.18)!important}
+html:not(.light) body .compact-mini-card .compact-net-row b{color:#67e8f9!important;-webkit-text-fill-color:#67e8f9!important}
+
+/* 雷达：日间实色正常状态不再死绿，圆圈改蓝/青/紫渐变，警戒/高危单独变色 */
+html.light body .radar-card.ok,
+html.light.solid body .radar-card.ok,
+body.light.solid .radar-card.ok{
+  --radar-color:#0ea5e9!important;
+}
+html.light body .radar-card.ok .radar,
+html.light.solid body .radar-card.ok .radar,
+body.light.solid .radar-card.ok .radar{
+  background:
+    conic-gradient(from 0deg,#0ea5e9 0 var(--risk),#22c55e var(--risk),rgba(124,58,237,.18) 100%),
+    repeating-radial-gradient(circle,transparent 0 21px,rgba(37,99,235,.20) 22px 23px),
+    radial-gradient(circle,#ecfeff,#dbeafe 58%,#f5f3ff)!important;
+}
+html.light body .radar-card.warn,
+html.light.solid body .radar-card.warn,
+body.light.solid .radar-card.warn{--radar-color:#f59e0b!important}
+html.light body .radar-card.danger,
+html.light.solid body .radar-card.danger,
+body.light.solid .radar-card.danger{--radar-color:#ef4444!important}
+.radar-card .radar::after{
+  animation:radarSweepRun 1.35s linear infinite!important;
+}
+.radar-card [data-radar-number]{
+  transition:color .25s ease, -webkit-text-fill-color .25s ease!important;
+}
+/* ===== end patch ===== */
+"""
+
+_BG_COMPACT_RADAR_FIX_JS = r"""
+<script>
+(function(){
+  function setBg(){
+    try{
+      document.body.style.setProperty('--custom-bg',"url('/theme-bg')",'important');
+      var img=new Image();
+      img.onload=function(){document.body.classList.add('has-custom-bg','bg-cache-ready');};
+      img.src='/theme-bg';
+    }catch(e){}
+  }
+
+  function parseBytes(s){
+    s=(s||'').toString();
+    var m=s.match(/([\d.]+)\s*(B|KB|MB|GB|TB)/i);
+    if(!m)return 0;
+    var n=parseFloat(m[1]||'0'), u=m[2].toUpperCase();
+    var k={B:1,KB:1024,MB:1048576,GB:1073741824,TB:1099511627776}[u]||1;
+    return n*k;
+  }
+
+  function pickNumber(obj,keys){
+    for(var i=0;i<keys.length;i++){
+      var v=obj&&obj[keys[i]];
+      if(v!==undefined&&v!==null&&v!==''&&!isNaN(Number(v)))return Number(v);
+    }
+    return 0;
+  }
+
+  function clsByRisk(r){return r>=75?'danger':(r>=45?'warn':'ok');}
+  function colorByCls(c){return c==='danger'?'#ef4444':(c==='warn'?'#f59e0b':'#0ea5e9');}
+
+  var radarPhase=0, radarTarget=0;
+  function updateRadarDisplay(card, risk, detail){
+    if(!card)return;
+    radarTarget=Math.max(0,Math.min(100,risk||0));
+    var cls=clsByRisk(radarTarget), color=colorByCls(cls), label=cls==='danger'?'高危':(cls==='warn'?'警戒':'正常');
+    card.classList.remove('ok','warn','danger');
+    card.classList.add(cls);
+    card.style.setProperty('--risk',Math.round(radarTarget)+'%');
+    card.style.setProperty('--radar-color',color);
+    var radar=card.querySelector('.radar');
+    if(radar){
+      radar.style.setProperty('--risk',Math.round(radarTarget)+'%');
+      radar.style.setProperty('--radar-color',color);
+    }
+    function txt(sel,v){var e=card.querySelector(sel);if(e)e.textContent=v;}
+    txt('[data-radar-score]',Math.round(radarTarget));
+    txt('[data-radar-label]',label);
+    if(detail){
+      txt('[data-radar-offline]',detail.offline+'/'+detail.total);
+      txt('[data-radar-cpu]',Math.round(detail.cpu)+'%');
+      txt('[data-radar-mem]',Math.round(detail.mem)+'%');
+      txt('[data-radar-tcp]',detail.tcp);
+    }
+  }
+
+  function updateRadarFromServers(ss){
+    var card=document.querySelector('[data-ops-radar]');
+    if(!card||!ss)return;
+    var total=Math.max(1,ss.length),offline=0,cpu=0,mem=0,disk=0,tcp=0,net=0;
+    ss.forEach(function(s){
+      if(!s.online)offline++;
+      cpu=Math.max(cpu,pickNumber(s,['cpu','cpu_percent']));
+      mem=Math.max(mem,pickNumber(s,['mem','mem_percent']));
+      disk=Math.max(disk,pickNumber(s,['disk','disk_percent']));
+      tcp=Math.max(tcp,pickNumber(s,['tcp_established','tcp','tcp_est','connections_established']));
+      net=Math.max(net,parseBytes(s.net_speed_html||''));
+    });
+    var netRisk=Math.min(100,net/(1024*1024)*10); // 10MB/s 约等于满风险
+    var risk=Math.max(offline*100/total,cpu,mem,disk,Math.min(100,tcp/20),netRisk);
+    updateRadarDisplay(card,risk,{offline:offline,total:total,cpu:cpu,mem:mem,tcp:tcp});
+  }
+
+  function animateRadarNumber(){
+    var card=document.querySelector('[data-ops-radar]');
+    if(!card)return;
+    var n=card.querySelector('[data-radar-number]');
+    if(!n)return;
+    radarPhase=(radarPhase+1)%1000;
+    var wobble=Math.sin(radarPhase/3)*2.2;
+    var display=Math.max(0,Math.min(100,Math.round(radarTarget+wobble)));
+    n.textContent=display;
+  }
+
+  function patchLive(){
+    var old=window.neonApplyPacket;
+    if(old&&!old.__bgCompactRadarFix){
+      window.neonApplyPacket=function(j){
+        var r=old(j);
+        try{if(j&&j.servers)updateRadarFromServers(j.servers);}catch(e){}
+        return r;
+      };
+      window.neonApplyPacket.__bgCompactRadarFix=true;
+    }
+  }
+
+  async function pollRadar(){
+    try{
+      var r=await fetch('/api/servers-live?t='+Date.now(),{cache:'no-store'});
+      var j=await r.json();
+      if(j&&j.servers)updateRadarFromServers(j.servers);
+    }catch(e){}
+  }
+
+  document.addEventListener('DOMContentLoaded',function(){
+    setBg();
+    patchLive();
+    pollRadar();
+    setInterval(function(){patchLive();pollRadar();},2000);
+    setInterval(animateRadarNumber,500);
+  });
+})();
+</script>
+"""
+
+def _cached_theme_bg():
+    fn = theme_bg_exists()
+    if not fn:
+        abort(404)
+    path = fn if os.path.isabs(str(fn)) else os.path.join(APP_DIR, fn)
+    resp = make_response(send_file(path))
+    resp.headers['Cache-Control'] = 'public, max-age=86400'
+    return resp
+
+def _apply_bg_compact_radar_fix():
+    global BASE
+    if 'uploaded bg visible/cache + dark compact readable + live radar' not in BASE:
+        BASE = BASE.replace('</style><script>', _BG_COMPACT_RADAR_FIX_CSS + '</style><script>')
+    if 'bgCompactRadarFix' not in BASE:
+        BASE = BASE.replace('</body></html>', _BG_COMPACT_RADAR_FIX_JS + '</body></html>')
+
+    # 彻底移除已有模板里的时间戳/no-store，避免背景图每次刷新都重新下载。
+    BASE = BASE.replace("url('/theme-bg?v={{now}}')", "url('/theme-bg')")
+    BASE = BASE.replace("let __bgv=Date.now();document.body.style.setProperty('--custom-bg',\"url('/theme-bg?v=\"+__bgv+\"')\");fetch('/theme-bg?v='+__bgv,{cache:'no-store'})", "document.body.style.setProperty('--custom-bg',\"url('/theme-bg')\");fetch('/theme-bg')")
+    BASE = BASE.replace("fetch('/theme-bg?v={{now}}')", "fetch('/theme-bg')")
+    BASE = BASE.replace("{cache:'no-store'}).then(r=>{if(r.ok)document.body.classList.add('has-custom-bg','login-bg')})", ").then(r=>{if(r.ok)document.body.classList.add('has-custom-bg','login-bg')})")
+
+    app.view_functions['theme_bg'] = _cached_theme_bg
+
+_apply_bg_compact_radar_fix()
+# ===== END USER PATCH =====
+
 if __name__=='__main__': init_db(); app.run(host=WEB_HOST,port=WEB_PORT,threaded=True)
